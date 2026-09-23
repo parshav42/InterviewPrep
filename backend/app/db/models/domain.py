@@ -136,6 +136,19 @@ class CreditTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class PaymentOrder(Base):
+    __tablename__ = "payment_orders"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    razorpay_order_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(100), unique=True)
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    credits_minutes: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="CREATED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class AnalyticsEvent(Base):
     __tablename__ = "analytics_events"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

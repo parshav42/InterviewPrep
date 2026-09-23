@@ -33,3 +33,17 @@ def debit_minutes(db: Session, user_id, minutes: int, reference: str | None = No
     db.add(CreditTransaction(user_id=user_id, amount_minutes=-minutes, transaction_type="DEBIT", payment_reference=reference))
     db.flush()
     return credit
+
+
+def grant_minutes(db: Session, user_id, minutes: int, reference: str, tx_type: str = "PURCHASE") -> Credit:
+    if minutes <= 0:
+        raise ValueError("Credit grant must be positive")
+    credit = ensure_credit_account(db, user_id)
+    db.execute(
+        update(Credit)
+        .where(Credit.id == credit.id)
+        .values(balance_minutes=Credit.balance_minutes + minutes)
+    )
+    db.add(CreditTransaction(user_id=user_id, amount_minutes=minutes, transaction_type=tx_type, payment_reference=reference))
+    db.flush()
+    return credit

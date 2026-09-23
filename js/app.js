@@ -1,4 +1,4 @@
-import { api, authApi, getAuthToken, interviewApi, jobApi, normalizeApiError, resumeApi, userApi } from './api.js?v=integration4';
+import { api, authApi, getAuthToken, interviewApi, jobApi, normalizeApiError, paymentApi, resumeApi, userApi } from './api.js?v=integration4';
 import { BrowserSpeechToTextProvider, BrowserTextToSpeechProvider, requestInterviewCamera, requestInterviewMicrophone, stopInterviewMedia } from './voice.js';
 
 const app = document.querySelector('#app');
@@ -27,7 +27,46 @@ function header() { return `<header class="topbar"><button class="brand" data-vi
 function resetUserState() { cleanupRealtimeInterview(); Object.assign(state, { view: 'auth', user: null, resumes: [], jobs: [], interviews: [], resume: null, interviewId: null, currentQuestionId: null, remoteQuestion: null, transcript: '', interimTranscript: '', feedback: null, interviewState: 'IDLE' }); }
 async function logout() { await authApi.logout(); resetUserState(); window.history.replaceState({}, '', '#login'); render(); }
 function setupProfileMenu() { const trigger = document.querySelector('.profile-chip'); if (!trigger) return; trigger.removeAttribute('data-view'); trigger.setAttribute('aria-expanded', 'false'); const menu = document.createElement('div'); menu.className = 'profile-menu'; menu.innerHTML = '<button class="profile-menu-item" data-view="profile">Profile / Settings</button>'; trigger.parentElement.append(menu); trigger.addEventListener('click', event => { event.stopPropagation(); const open = menu.classList.toggle('open'); trigger.setAttribute('aria-expanded', String(open)); }); if (!document.body.dataset.profileMenuBound) { document.addEventListener('click', event => { const openMenu = document.querySelector('.profile-menu.open'); if (openMenu && !event.target.closest('.profile-menu') && !event.target.closest('.profile-chip')) { openMenu.classList.remove('open'); document.querySelector('.profile-chip')?.setAttribute('aria-expanded', 'false'); } }); document.body.dataset.profileMenuBound = 'true'; } }
-function showCreditsPanel() { if (document.querySelector('#credits-panel')) return; const panel = document.createElement('div'); panel.id = 'credits-panel'; panel.className = 'credits-panel'; panel.innerHTML = '<strong>Choose a plan</strong><span>Starter · 60 minutes · ₹0 (free)</span><span>Pro · 300 minutes · ₹499</span><button class="btn btn-secondary" type="button">Contact us / Coming soon</button>'; document.body.append(panel); panel.querySelector('button').addEventListener('click', () => showToast('Coming soon', 'Contact us to arrange credits.')); }
+async function refreshCredits() { const credits = await userApi.credits(); state.creditBalance = credits.balance_minutes; render(); }
+async function purchasePlan(plan) {
+  try {
+    const response = await paymentApi.createOrder(plan);
+    document.querySelector('#credits-panel')?.remove();
+    if (response.free) {
+      await refreshCredits();
+      showToast('60 minutes added');
+      return;
+    }
+    if (typeof window.Razorpay !== 'function') throw new Error('Payment checkout is unavailable. Please refresh and try again.');
+    const checkout = new window.Razorpay({
+      key: response.key_id,
+      amount: response.amount_paise,
+      currency: 'INR',
+      order_id: response.order_id,
+      name: 'InterviewAI',
+      description: plan === 'pro' ? 'Pro - 300 minutes' : 'Starter - 60 minutes',
+      handler: async result => {
+        try {
+          await paymentApi.verify({
+            razorpay_order_id: result.razorpay_order_id,
+            razorpay_payment_id: result.razorpay_payment_id,
+            razorpay_signature: result.razorpay_signature
+          });
+          await refreshCredits();
+          showToast('Payment successful. Credits added.');
+        } catch (error) {
+          showToast('Payment verification failed', normalizeApiError(error));
+        }
+      },
+      modal: { ondismiss: () => showToast('Payment cancelled') },
+      theme: { color: '#5b21b6' }
+    });
+    checkout.open();
+  } catch (error) {
+    showToast('Could not create payment order', normalizeApiError(error));
+  }
+}
+function showCreditsPanel() { if (document.querySelector('#credits-panel')) return; const panel = document.createElement('div'); panel.id = 'credits-panel'; panel.className = 'credits-panel'; panel.innerHTML = '<strong>Choose a plan</strong><button class="btn btn-secondary credit-plan" data-plan="starter" type="button">Starter · 60 minutes · Free</button><button class="btn btn-primary credit-plan" data-plan="pro" type="button">Pro · 300 minutes · ₹499</button>'; document.body.append(panel); panel.querySelectorAll('.credit-plan').forEach(button => button.addEventListener('click', () => purchasePlan(button.dataset.plan))); }
 function shell(content, noHeader = false) { app.innerHTML = `<div class="app-shell">${noHeader ? '' : header()}${content}</div>`; setupProfileMenu(); bindEvents(); }
 function pageHeading(eyebrow, title, subtitle, action = '') { return `<div class="page-heading"><div><p class="eyebrow">${eyebrow}</p><h1>${title}</h1><p class="subtle">${subtitle}</p></div>${action}</div>`; }
 function dashboard() { shell(`<main class="page">${pageHeading('Wednesday, September 23', 'Good afternoon, Alex', 'Ready for your next interview?', '<button class="btn btn-primary" data-view="resume">Start new interview ' + icon('arrow') + '</button>')}<section class="stat-grid"><article class="card stat-card"><div class="stat-top"><span>Interviews completed</span><span class="stat-icon">↗</span></div><strong class="stat-value">12</strong><span class="muted">+3 this month</span></article><article class="card stat-card"><div class="stat-top"><span>Practice time</span><span class="stat-icon">◷</span></div><strong class="stat-value">8.5h</strong><span class="muted">+1.2h this month</span></article><article class="card stat-card"><div class="stat-top"><span>Average score</span><span class="stat-icon">✦</span></div><strong class="stat-value">82%</strong><span class="muted">Top 18% of users</span></article><article class="card stat-card"><div class="stat-top"><span>Current streak</span><span class="stat-icon">♢</span></div><strong class="stat-value">6 days</strong><span class="muted">Personal best: 14</span></article></section><section class="dashboard-grid"><article class="card panel"><div class="panel-heading"><h3>Recent practice</h3><button class="btn btn-quiet" data-view="history">View all ${icon('arrow')}</button></div><div class="activity-list"><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Machine Learning Engineer</strong><span>Technical + Behavioral · 2 hours ago</span></div><span class="score-pill">82%</span></div><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Python Developer</strong><span>Technical · Monday</span></div><span class="score-pill">88%</span></div><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Data Scientist</strong><span>Mixed interview · Sep 18</span></div><span class="score-pill">79%</span></div></div></article><article class="card panel streak-panel"><p class="eyebrow" style="color:#78aaff">Your momentum</p><h3>Keep your streak alive</h3><p class="subtle">One focused session today keeps your progress moving.</p><div class="streak-number">6</div><span class="subtle">days in a row</span><div style="margin-top:25px"><div class="progress" style="background:#244268"><span style="width:60%;background:#68a7ff"></span></div><p class="subtle" style="font-size:12px;margin:8px 0 0">4 more days to beat your record</p></div></article></section></main>`); }

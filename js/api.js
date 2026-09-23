@@ -59,6 +59,11 @@ export const userApi = {
   credits: () => api('/api/user/credits')
 };
 
+export const paymentApi = {
+  createOrder: plan => api('/api/payments/create-order', { method: 'POST', body: JSON.stringify({ plan }) }),
+  verify: payload => api('/api/payments/verify', { method: 'POST', body: JSON.stringify(payload) })
+};
+
 export const resumeApi = {
   upload: file => { const form = new FormData(); form.append('file', file); return api('/api/resumes/upload', { method: 'POST', body: form }); },
   list: () => api('/api/resumes'),

@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     tts_api_key: str | None = None
     audio_retention_days: int = 7
     max_interview_questions: int = 10
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
 
     model_config = SettingsConfigDict(env_file=BACKEND_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 

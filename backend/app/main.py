@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import admin, analytics, auth, interviews, jobs, resumes, users, voice
+from app.api import admin, analytics, auth, interviews, jobs, payments, resumes, users, voice
 from app.core.config import get_settings
 from app.db.database import Base, engine
 from app.services.llm.service import get_llm_service
@@ -25,6 +25,7 @@ app.include_router(interviews.router)
 app.include_router(analytics.router)
 app.include_router(admin.router)
 app.include_router(voice.router)
+app.include_router(payments.router, prefix="/api/payments", tags=["payments"])
 
 
 @app.middleware("http")
@@ -35,10 +36,11 @@ async def security_headers(request: Request, call_next) -> Response:
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Content-Security-Policy"] = (
     "default-src 'self'; "
-    "connect-src 'self' http://127.0.0.1:8002 http://localhost:8002; "
+    "connect-src 'self' http://127.0.0.1:8002 http://localhost:8002 https://api.razorpay.com https://lumberjack.razorpay.com; "
     "media-src 'self' blob:; "
-    "img-src 'self' data: blob:; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "img-src 'self' data: blob: https://*.razorpay.com; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com; "
+    "frame-src https://api.razorpay.com https://checkout.razorpay.com; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com data:; "
 )
