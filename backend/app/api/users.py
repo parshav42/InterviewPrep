@@ -10,6 +10,7 @@ from app.db.database import get_db
 from app.db.models.user import User
 from app.db.models.domain import Interview, Job, Resume
 from app.schemas.auth import UserResponse
+from app.db.models.domain import Credit
 
 router = APIRouter(prefix="/api/user", tags=["user"])
 
@@ -17,6 +18,12 @@ router = APIRouter(prefix="/api/user", tags=["user"])
 @router.get("/profile", response_model=UserResponse)
 def profile(user: Annotated[User, Depends(current_user)]) -> UserResponse:
     return user
+
+
+@router.get("/credits")
+def credits(user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> dict[str, int]:
+    credit = db.scalar(select(Credit).where(Credit.user_id == user.id))
+    return {"balance_minutes": credit.balance_minutes if credit else 0}
 
 
 @router.patch("/profile", response_model=UserResponse)

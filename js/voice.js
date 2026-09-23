@@ -1,24 +1,60 @@
+const SPEECH_TAIL_DELAY_MS = 500;
+
 export class BrowserTextToSpeechProvider {
-  constructor() { this.synthesis = window.speechSynthesis; }
+  constructor() {
+    this.synthesis = window.speechSynthesis;
+    this.pendingVoices = null;
+    this.endTimer = null;
+  }
 
   get available() { return Boolean(this.synthesis && window.SpeechSynthesisUtterance); }
 
-  speak(text, { onStart, onEnd, onError } = {}) {
-    if (!this.available) {
-      onError?.(new Error('Text-to-speech is not supported in this browser.'));
-      return;
-    }
-    this.stop();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.96;
-    utterance.pitch = 1;
-    utterance.onstart = () => onStart?.();
-    utterance.onend = () => onEnd?.();
-    utterance.onerror = event => onError?.(new Error(event.error || 'Text-to-speech failed.'));
-    this.synthesis.speak(utterance);
+  async waitForVoices() {
+    if (!this.available) return;
+    const voices = this.synthesis.getVoices();
+    if (voices.length) return;
+    await new Promise(resolve => {
+      const handler = () => {
+        this.synthesis.removeEventListener('voiceschanged', handler);
+        resolve();
+      };
+      this.synthesis.addEventListener('voiceschanged', handler, { once: true });
+    });
   }
 
-  stop() { this.synthesis?.cancel(); }
+  async speak(text, { onStart, onEnd, onError } = {}) {
+    if (!this.available) {
+      onError?.(new Error('Text-to-speech is not supported in this browser.'));
+      return false;
+    }
+    await this.waitForVoices();
+    this.stop();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US';
+    utterance.rate = 0.96;
+    utterance.pitch = 1;
+    const voices = this.synthesis.getVoices();
+    const preferredVoice = voices.find(voice => voice.lang && voice.lang.toLowerCase().startsWith('en')) || voices[0];
+    if (preferredVoice) utterance.voice = preferredVoice;
+    utterance.onstart = () => onStart?.();
+    utterance.onend = () => {
+      this.endTimer = setTimeout(() => {
+        this.endTimer = null;
+        onEnd?.();
+      }, SPEECH_TAIL_DELAY_MS);
+    };
+    utterance.onerror = event => onError?.(new Error(event.error || 'Text-to-speech failed.'));
+    this.synthesis.speak(utterance);
+    return true;
+  }
+
+  stop() {
+    if (this.endTimer) {
+      clearTimeout(this.endTimer);
+      this.endTimer = null;
+    }
+    this.synthesis?.cancel();
+  }
 }
 
 export class BrowserSpeechToTextProvider {
@@ -57,6 +93,10 @@ export class BrowserSpeechToTextProvider {
         if (event.results[index].isFinal) finalText += `${transcript} `;
         else interim += `${transcript} `;
       }
+      if (window.speechSynthesis?.speaking) {
+        console.debug('[voice] discarded STT result while TTS is speaking');
+        return;
+      }
       if (interim) this.onInterim?.(interim.trim());
       if (finalText) this.onFinal?.(finalText.trim());
     };
@@ -73,7 +113,7 @@ export class BrowserSpeechToTextProvider {
       recognition.start();
     } catch (error) {
       this.recognition = null;
-      onError?.(error);
+      this.onError?.(error);
       return false;
     }
     return true;

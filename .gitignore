@@ -1,8 +1,25 @@
 .env
+.env.*
+!.env.example
 backend/.env
 backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/*.db
 backend/.private_uploads/
-*.pyc
+node_modules/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+playwright-report/
+test-results/
+*.log
+*.sqlite3
+*.db
+.DS_Store
+
+# local generated artifacts
+coverage/
+.vite/
+venv/
+.venv/

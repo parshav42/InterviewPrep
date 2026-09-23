@@ -55,7 +55,8 @@ export const authApi = {
 };
 
 export const userApi = {
-  profile: () => api('/api/user/profile')
+  profile: () => api('/api/user/profile'),
+  credits: () => api('/api/user/credits')
 };
 
 export const resumeApi = {

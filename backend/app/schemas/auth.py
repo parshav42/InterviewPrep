@@ -31,3 +31,4 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+    verification_token: str | None = None

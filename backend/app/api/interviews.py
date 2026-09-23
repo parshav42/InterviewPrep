@@ -12,13 +12,20 @@ from app.db.database import get_db
 from app.db.models.domain import Answer, Feedback, Interview, InterviewQuestion, InterviewStatus, Job, Resume
 from app.db.models.user import User
 from app.schemas.domain import AnswerCreate, FeedbackResponse, InterviewCreate, InterviewResponse, QuestionResponse
+from app.schemas.ai import FinalFeedback
 from app.services.llm.factory import get_structured_llm_service
 from app.services.llm.qwen_provider import LLMProviderError
 from app.services.usage_service import record_ai_usage
 from app.middleware.llm_rate_limit import check_llm_rate_limit
 from app.core.config import get_settings
+from app.services.credit_service import debit_minutes
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
+MIN_ANSWER_LENGTH = 10
+
+
+def normalized_text(value: str) -> str:
+    return " ".join("".join(character.lower() if character.isalnum() else " " for character in value).split())
 
 
 def owned_interview(interview_id: UUID, user_id: UUID, db: Session) -> Interview:
@@ -57,6 +64,7 @@ async def start_interview(interview_id: UUID, user: Annotated[User, Depends(curr
     if interview.status not in (InterviewStatus.CREATED, InterviewStatus.IN_PROGRESS):
         raise HTTPException(status_code=409, detail="Interview cannot be started")
     interview.status = InterviewStatus.IN_PROGRESS
+    debit_minutes(db, user.id, interview.duration_target_minutes, str(interview.id))
     interview.started_at = interview.started_at or datetime.now(timezone.utc)
     if not db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id)):
         resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
@@ -81,6 +89,9 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     question = db.scalar(select(InterviewQuestion).where(InterviewQuestion.id == payload.question_id, InterviewQuestion.interview_id == interview.id))
     if interview.status != InterviewStatus.IN_PROGRESS or not question:
         raise HTTPException(status_code=409, detail="Interview question is not active")
+    answer_text = payload.answer_text.strip()
+    if len(answer_text) < MIN_ANSWER_LENGTH or normalized_text(answer_text) == normalized_text(question.question_text):
+        raise HTTPException(status_code=422, detail="Please provide a substantive answer before continuing.")
     if interview.started_at:
         started_at = interview.started_at
         if started_at.tzinfo is None:
@@ -94,19 +105,20 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     job = db.get(Job, interview.job_id) if interview.job_id else None
     interview_context = f"Role: {job.title if job else 'Target role'}\nInterview type: {interview.interview_type}\nDifficulty: {interview.difficulty}\nCandidate profile: {(resume.parsed_profile_json if resume else {})}\nJob analysis: {(job.parsed_analysis_json if job else {})}"
     try:
-        evaluation, result = await get_structured_llm_service().evaluate_answer(question.question_text, payload.answer_text, interview_context)
+        evaluation, result = await get_structured_llm_service().evaluate_answer(question.question_text, answer_text, interview_context)
     except (ValueError, LLMProviderError) as exc:
         raise HTTPException(status_code=502, detail="Answer evaluation is temporarily unavailable") from exc
-    answer = Answer(question_id=question.id, user_id=user.id, answer_text=payload.answer_text, response_duration_seconds=payload.response_duration_seconds)
+    answer = Answer(question_id=question.id, user_id=user.id, answer_text=answer_text, response_duration_seconds=payload.response_duration_seconds)
     db.add(answer)
     db.flush()
     feedback = Feedback(answer_id=answer.id, technical_score=evaluation.technical_accuracy, communication_score=evaluation.communication, relevance_score=evaluation.relevance, clarity_score=evaluation.depth, confidence_score=evaluation.problem_solving, strengths=evaluation.strengths, weaknesses=evaluation.weaknesses, suggestions=[evaluation.recommended_followup] if evaluation.recommended_followup else [], ai_feedback=evaluation.feedback)
     db.add(feedback)
     next_number = (db.scalar(select(InterviewQuestion.question_number).where(InterviewQuestion.interview_id == interview.id).order_by(InterviewQuestion.question_number.desc()).limit(1)) or 0) + 1
     followup_result = None
+    final_result = None
     if next_number <= get_settings().max_interview_questions:
         try:
-            followup, followup_result = await get_structured_llm_service().generate_question(f"Previous question: {question.question_text}\nPrevious answer: {payload.answer_text}\nEvaluation: {evaluation.model_dump()}\nGenerate an adaptive follow-up question.")
+            followup, followup_result = await get_structured_llm_service().generate_question(f"Previous question: {question.question_text}\nPrevious answer: {answer_text}\nEvaluation: {evaluation.model_dump()}\nGenerate an adaptive follow-up question.")
             followup_text = followup.question
             followup_category = followup.category
             followup_difficulty = followup.difficulty
@@ -115,10 +127,27 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
             followup_category = "Behavioral"
             followup_difficulty = interview.difficulty
         db.add(InterviewQuestion(interview_id=interview.id, question_number=next_number, question_text=followup_text, category=followup_category, difficulty=followup_difficulty))
+    else:
+        evaluation_payload = json.dumps([{"question": question.question_text, "answer": answer_text, "feedback": evaluation.feedback, "scores": {"technical": evaluation.technical_accuracy, "communication": evaluation.communication, "relevance": evaluation.relevance, "clarity": evaluation.depth, "confidence": evaluation.problem_solving}}])
+        try:
+            final_feedback, final_result = await get_structured_llm_service().generate_final_feedback(interview_context, evaluation_payload)
+        except (ValueError, LLMProviderError):
+            final_feedback = FinalFeedback(overall_score=evaluation.overall_score, summary="Interview completed with the available answer evaluation.", strengths=evaluation.strengths, weaknesses=evaluation.weaknesses, recommended_practice=[evaluation.recommended_followup] if evaluation.recommended_followup else [])
+        interview.ended_at = datetime.now(timezone.utc)
+        interview.status = InterviewStatus.COMPLETED
+        interview.final_feedback_json = final_feedback.model_dump()
+        interview.overall_score = final_feedback.overall_score
+        if interview.started_at:
+            started_at = interview.started_at
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            interview.actual_duration_seconds = max(0, int((interview.ended_at - started_at).total_seconds()))
     db.commit()
     record_ai_usage(db, user_id=user.id, interview_id=interview.id, request_type="answer_evaluation", result=result)
     if followup_result:
         record_ai_usage(db, user_id=user.id, interview_id=interview.id, request_type="followup_generation", result=followup_result)
+    if final_result:
+        record_ai_usage(db, user_id=user.id, interview_id=interview.id, request_type="final_feedback", result=final_result)
     db.refresh(feedback)
     return feedback
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import admin, analytics, auth, interviews, jobs, resumes, users
+from app.api import admin, analytics, auth, interviews, jobs, resumes, users, voice
 from app.core.config import get_settings
 from app.db.database import Base, engine
 from app.services.llm.service import get_llm_service
@@ -24,6 +24,7 @@ app.include_router(jobs.router)
 app.include_router(interviews.router)
 app.include_router(analytics.router)
 app.include_router(admin.router)
+app.include_router(voice.router)
 
 
 @app.middleware("http")
@@ -32,7 +33,15 @@ async def security_headers(request: Request, call_next) -> Response:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; connect-src 'self' http://127.0.0.1:8002 http://localhost:8002; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    response.headers["Content-Security-Policy"] = (
+    "default-src 'self'; "
+    "connect-src 'self' http://127.0.0.1:8002 http://localhost:8002; "
+    "media-src 'self' blob:; "
+    "img-src 'self' data: blob:; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com data:; "
+)
     if settings.app_env == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -53,6 +62,11 @@ def health() -> dict[str, str]:
 
 @app.get("/", include_in_schema=False)
 def frontend() -> FileResponse:
+    return FileResponse(project_root / "index.html")
+
+
+@app.get("/index.html", include_in_schema=False)
+def frontend_index() -> FileResponse:
     return FileResponse(project_root / "index.html")
 
 

@@ -11,6 +11,7 @@ from app.core.security import create_access_token, create_email_verification_tok
 from app.db.database import get_db
 from app.db.models.user import User, UserSession
 from app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest
+from app.services.credit_service import ensure_credit_account
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -36,8 +37,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
     db.add(user)
     db.commit()
     db.refresh(user)
-    logger.info("Email verification token for %s: %s", user.email, create_email_verification_token(str(user.id)))
-    return issue_auth(user, db)
+    ensure_credit_account(db, user.id)
+    db.commit()
+    response = issue_auth(user, db)
+    response.verification_token = create_email_verification_token(str(user.id))
+    return response
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -47,6 +51,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="This account is inactive")
+    # if not user.email_verified:
+    #     raise HTTPException(status_code=403, detail="Email verification required")
     return issue_auth(user, db)
 
 

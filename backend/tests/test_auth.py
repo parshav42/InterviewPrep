@@ -27,6 +27,17 @@ def test_security_headers_are_present(client):
     assert "default-src 'self'" in headers["content-security-policy"]
 
 
+def test_production_security_headers_include_hsts():
+    from app.main import app, settings
+    from fastapi.testclient import TestClient
+    original = settings.app_env
+    settings.app_env = "production"
+    try:
+        assert "max-age=31536000" in TestClient(app).get("/health").headers["strict-transport-security"]
+    finally:
+        settings.app_env = original
+
+
 def test_register_and_me(client):
     response = client.post("/api/auth/register", json={"email": "alex@example.com", "password": "correct horse battery", "full_name": "Alex Kim"})
     assert response.status_code == 201
