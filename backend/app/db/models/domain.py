@@ -126,6 +126,14 @@ class Credit(Base):
     balance_minutes: Mapped[int] = mapped_column(Integer, default=60)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
+    @property
+    def balance_interviews(self) -> int:
+        return self.balance_minutes
+
+    @balance_interviews.setter
+    def balance_interviews(self, value: int) -> None:
+        self.balance_minutes = value
+
 
 class CreditTransaction(Base):
     __tablename__ = "credit_transactions"

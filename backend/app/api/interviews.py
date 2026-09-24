@@ -18,7 +18,7 @@ from app.services.llm.qwen_provider import LLMProviderError
 from app.services.usage_service import record_ai_usage
 from app.middleware.llm_rate_limit import check_llm_rate_limit
 from app.core.config import get_settings
-from app.services.credit_service import debit_minutes
+from app.services.credit_service import debit_interviews
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
 MIN_ANSWER_LENGTH = 10
@@ -133,7 +133,7 @@ async def start_interview(interview_id: UUID, user: Annotated[User, Depends(curr
     if interview.status not in (InterviewStatus.CREATED, InterviewStatus.IN_PROGRESS):
         raise HTTPException(status_code=409, detail="Interview cannot be started")
     interview.status = InterviewStatus.IN_PROGRESS
-    debit_minutes(db, user.id, interview.duration_target_minutes, str(interview.id))
+    debit_interviews(db, user.id, 1, str(interview.id))
     interview.started_at = interview.started_at or datetime.now(timezone.utc)
     if not db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id)):
         try:

@@ -22,19 +22,25 @@ function showToast(title, detail = '') { const toast = document.createElement('d
 function icon(name) { return icons[name] || ''; }
 function formatTime(seconds) { return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; }
 function userInitials() { return (state.user?.full_name || 'User').split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase(); }
-function creditsMarkup() { return state.creditBalance !== null && state.creditBalance < 5 ? '<button class="credits buy-credits" id="buy-credits" type="button">Buy credits</button>' : `<span class="credits"><i class="credit-dot"></i>Credits: ${state.creditBalance ?? '--'} min</span>`; }
+function creditsMarkup() {
+  const balance = Number.isFinite(state.creditBalance) ? state.creditBalance : 0;
+  const needsTopUp = balance <= 0;
+  return needsTopUp
+    ? '<button class="credits buy-credits" id="buy-credits" type="button">Buy interviews</button>'
+    : `<span class="credits"><i class="credit-dot"></i>Interviews left: ${balance}</span>`;
+}
 function header() { return `<header class="topbar"><button class="brand" data-view="dashboard" aria-label="Go to dashboard"><span class="brand-text">InterviewAI</span></button><nav class="nav-links" aria-label="Primary"><button class="nav-link ${state.view === 'dashboard' ? 'active' : ''}" data-view="dashboard">Dashboard</button><button class="nav-link ${['resume','setup','lobby','interview'].includes(state.view) ? 'active' : ''}" data-view="resume">Practice</button><button class="nav-link ${state.view === 'history' ? 'active' : ''}" data-view="history">History</button></nav><div class="nav-actions">${creditsMarkup()}<button class="profile-chip" data-view="profile"><span class="avatar">${userInitials()}</span><span>${state.user?.full_name || 'Account'}</span><span>⌄</span></button><button class="icon-btn mobile-menu" aria-label="Open menu">☰</button></div></header>`; }
 function resetUserState() { cleanupRealtimeInterview(); Object.assign(state, { view: 'auth', user: null, resumes: [], jobs: [], interviews: [], resume: null, resumeError: null, role: '', jobDescription: '', interviewId: null, currentQuestionId: null, remoteQuestion: null, transcript: '', interimTranscript: '', feedback: null, interviewState: 'IDLE' }); }
 async function logout() { await authApi.logout(); resetUserState(); window.history.replaceState({}, '', '#login'); render(); }
 function setupProfileMenu() { const trigger = document.querySelector('.profile-chip'); if (!trigger) return; trigger.removeAttribute('data-view'); trigger.setAttribute('aria-expanded', 'false'); const menu = document.createElement('div'); menu.className = 'profile-menu'; menu.innerHTML = '<button class="profile-menu-item" data-view="profile">Profile / Settings</button>'; trigger.parentElement.append(menu); trigger.addEventListener('click', event => { event.stopPropagation(); const open = menu.classList.toggle('open'); trigger.setAttribute('aria-expanded', String(open)); }); if (!document.body.dataset.profileMenuBound) { document.addEventListener('click', event => { const openMenu = document.querySelector('.profile-menu.open'); if (openMenu && !event.target.closest('.profile-menu') && !event.target.closest('.profile-chip')) { openMenu.classList.remove('open'); document.querySelector('.profile-chip')?.setAttribute('aria-expanded', 'false'); } }); document.body.dataset.profileMenuBound = 'true'; } }
-async function refreshCredits() { const credits = await userApi.credits(); state.creditBalance = credits.balance_minutes; render(); }
+async function refreshCredits() { const credits = await userApi.credits(); state.creditBalance = Number(credits.balance_interviews ?? credits.balance_minutes ?? 0); render(); }
 async function purchasePlan(plan) {
   try {
     const response = await paymentApi.createOrder(plan);
     document.querySelector('#credits-panel')?.remove();
     if (response.free) {
       await refreshCredits();
-      showToast('60 minutes added');
+      showToast('1 free interview added');
       return;
     }
     if (typeof window.Razorpay !== 'function') throw new Error('Payment checkout is unavailable. Please refresh and try again.');
@@ -44,7 +50,7 @@ async function purchasePlan(plan) {
       currency: 'INR',
       order_id: response.order_id,
       name: 'InterviewAI',
-      description: plan === 'pro' ? 'Pro - 300 minutes' : 'Starter - 60 minutes',
+      description: plan === 'pro' ? 'Pro - 5 interviews' : 'Starter - 1 interview',
       handler: async result => {
         try {
           await paymentApi.verify({
@@ -66,11 +72,12 @@ async function purchasePlan(plan) {
     showToast('Could not create payment order', normalizeApiError(error));
   }
 }
-function showCreditsPanel() { if (document.querySelector('#credits-panel')) return; const panel = document.createElement('div'); panel.id = 'credits-panel'; panel.className = 'credits-panel'; panel.innerHTML = '<strong>Choose a plan</strong><button class="btn btn-secondary credit-plan" data-plan="starter" type="button">Starter · 60 minutes · Free</button><button class="btn btn-primary credit-plan" data-plan="pro" type="button">Pro · 300 minutes · ₹499</button>'; document.body.append(panel); panel.querySelectorAll('.credit-plan').forEach(button => button.addEventListener('click', () => purchasePlan(button.dataset.plan))); }
+function showCreditsPanel() { if (document.querySelector('#credits-panel')) return; const panel = document.createElement('div'); panel.id = 'credits-panel'; panel.className = 'credits-panel'; panel.innerHTML = '<strong>Choose a plan</strong><button class="btn btn-secondary credit-plan" data-plan="starter" type="button">Starter · 1 interview · Free</button><button class="btn btn-primary credit-plan" data-plan="pro" type="button">Pro · 5 interviews · ₹499</button>'; document.body.append(panel); panel.querySelectorAll('.credit-plan').forEach(button => button.addEventListener('click', () => purchasePlan(button.dataset.plan))); }
 function shell(content, noHeader = false) { app.innerHTML = `<div class="app-shell">${noHeader ? '' : header()}${content}</div>`; setupProfileMenu(); bindEvents(); }
 function pageHeading(eyebrow, title, subtitle, action = '') { return `<div class="page-heading"><div><p class="eyebrow">${eyebrow}</p><h1>${title}</h1><p class="subtle">${subtitle}</p></div>${action}</div>`; }
 function dashboard() { shell(`<main class="page">${pageHeading('Wednesday, September 23', 'Good afternoon, Alex', 'Ready for your next interview?', '<button class="btn btn-primary" data-view="resume">Start new interview ' + icon('arrow') + '</button>')}<section class="stat-grid"><article class="card stat-card"><div class="stat-top"><span>Interviews completed</span><span class="stat-icon">↗</span></div><strong class="stat-value">12</strong><span class="muted">+3 this month</span></article><article class="card stat-card"><div class="stat-top"><span>Practice time</span><span class="stat-icon">◷</span></div><strong class="stat-value">8.5h</strong><span class="muted">+1.2h this month</span></article><article class="card stat-card"><div class="stat-top"><span>Average score</span><span class="stat-icon">✦</span></div><strong class="stat-value">82%</strong><span class="muted">Top 18% of users</span></article><article class="card stat-card"><div class="stat-top"><span>Current streak</span><span class="stat-icon">♢</span></div><strong class="stat-value">6 days</strong><span class="muted">Personal best: 14</span></article></section><section class="dashboard-grid"><article class="card panel"><div class="panel-heading"><h3>Recent practice</h3><button class="btn btn-quiet" data-view="history">View all ${icon('arrow')}</button></div><div class="activity-list"><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Machine Learning Engineer</strong><span>Technical + Behavioral · 2 hours ago</span></div><span class="score-pill">82%</span></div><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Python Developer</strong><span>Technical · Monday</span></div><span class="score-pill">88%</span></div><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Data Scientist</strong><span>Mixed interview · Sep 18</span></div><span class="score-pill">79%</span></div></div></article><article class="card panel streak-panel"><p class="eyebrow" style="color:#78aaff">Your momentum</p><h3>Keep your streak alive</h3><p class="subtle">One focused session today keeps your progress moving.</p><div class="streak-number">6</div><span class="subtle">days in a row</span><div style="margin-top:25px"><div class="progress" style="background:#244268"><span style="width:60%;background:#68a7ff"></span></div><p class="subtle" style="font-size:12px;margin:8px 0 0">4 more days to beat your record</p></div></article></section></main>`); }
-function canContinueToSetup() { return Boolean(state.resume && state.resume.id && !state.resumeError); }
+function getLatestResume() { return state.resume || state.resumes[0] || null; }
+function canContinueToSetup() { const resume = getLatestResume(); return Boolean(resume && resume.id && !state.resumeError) || Boolean(state.resumes.length && !state.resumeError); }
 function syncResumeGate() {
   const continueButton = document.querySelector('[data-view="setup"]');
   const helper = document.querySelector('#resume-gate-help');
@@ -86,7 +93,11 @@ function syncJobSetupValidation() {
   if (button) button.disabled = !enabled;
   if (helper) helper.textContent = enabled ? '' : 'Job title is required';
 }
-function resume() { shell(`<main class="page">${pageHeading('Step 1 of 3', 'Build your personalized interview', "Upload your resume and we'll tailor the interview to your experience.")}<section class="card form-card"><div class="upload-zone" id="upload-zone"><div class="upload-icon">${icon('upload')}</div><h3>Drag & drop your resume here</h3><p class="subtle" style="margin-bottom:0">or <label for="resume-input">browse files</label></p><input id="resume-input" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><p class="upload-help">PDF or DOCX · Maximum 10MB</p></div><div id="resume-result"></div><div style="display:flex;justify-content:flex-end;align-items:center;flex-direction:column;gap:8px;margin-top:24px"><button class="btn btn-primary" data-view="setup" ${canContinueToSetup() ? '' : 'disabled'}>Continue to job setup ${icon('arrow')}</button><p id="resume-gate-help" class="muted" style="margin:0;min-height:20px;">${canContinueToSetup() ? '' : 'Upload a resume to continue'}</p></div></section></main>`); }
+function resume() {
+  const resume = getLatestResume();
+  if (resume && !state.resume) state.resume = resume;
+  shell(`<main class="page">${pageHeading('Step 1 of 3', 'Build your personalized interview', "Upload your resume and we'll tailor the interview to your experience.")}<section class="card form-card"><div class="upload-zone" id="upload-zone"><div class="upload-icon">${icon('upload')}</div><h3>Drag & drop your resume here</h3><p class="subtle" style="margin-bottom:0">or <label for="resume-input">browse files</label></p><input id="resume-input" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><p class="upload-help">PDF or DOCX · Maximum 10MB</p></div><div id="resume-result"></div><div style="display:flex;justify-content:flex-end;align-items:center;flex-direction:column;gap:8px;margin-top:24px"><button class="btn btn-primary" data-view="setup" ${canContinueToSetup() ? '' : 'disabled'}>Continue to job setup ${icon('arrow')}</button><p id="resume-gate-help" class="muted" style="margin:0;min-height:20px;">${canContinueToSetup() ? '' : 'Upload a resume to continue'}</p></div></section></main>`);
+}
 function resumeResult() { const file = state.resume || (state.resumes[0] && { name: state.resumes[0].original_filename, size: `${(state.resumes[0].file_size / 1024 / 1024).toFixed(1)} MB`, id: state.resumes[0].id, parsed: state.resumes[0].parsed_profile_json || {}, extracted_text_preview: state.resumes[0].extracted_text_preview || state.resumes[0].extracted_text || '' }); if (!file) return emptyState('No resume uploaded', 'Upload a PDF or DOCX to personalize your interview.'); const parsed = file.parsed || {}; const skills = Array.isArray(parsed.skills) ? parsed.skills : []; const summary = parsed.summary || 'No summary available.'; const experienceYears = parsed.experience_years ?? (parsed.experience ? parsed.experience.length : 0); const preview = file.warning || file.extracted_text_preview || 'No extracted text preview available.'; const errorBanner = file.warning ? `<div class="error-banner" style="margin-top:12px;color:#fca5a5;background:rgba(127,29,29,0.35);border:1px solid rgba(252,165,165,0.4);padding:10px 12px;border-radius:10px;">${file.warning}</div>` : ''; return `<div class="file-card"><span class="file-icon">${icon('file')}</span><div class="file-meta"><strong>${file.name || file.original_filename || 'Resume'}</strong><span>${file.size || 'Uploaded'} · <span style="color:var(--green)">Resume analyzed</span></span></div><button class="icon-btn" id="remove-resume" aria-label="Remove resume">×</button></div>${errorBanner}<div class="extracted"><div class="panel-heading"><div><h3>Resume analysis</h3><span class="muted">We’ll use this context to personalize your questions.</span></div></div><details open><summary style="cursor:pointer;font-weight:600;margin-bottom:10px;">Extracted preview</summary><p class="subtle" style="white-space:pre-wrap;margin-top:12px;max-height:180px;overflow:auto;">${preview}</p></details><div style="margin-top:14px"><strong class="muted" style="font-size:12px;display:block;margin-bottom:8px">Parsed profile</strong><ul class="tag-list" style="margin:0 0 10px;">${skills.length ? skills.slice(0, 8).map(skill => `<li class="tag">${skill}</li>`).join('') : '<li class="tag">No skills detected</li>'}</ul><p class="subtle" style="margin:0 0 8px;"><strong>Experience:</strong> ${experienceYears} years</p><p class="subtle" style="margin:0;"><strong>Summary:</strong> ${summary}</p></div></div>`; }
 function setup() { shell(`<main class="page">${pageHeading('Step 2 of 3', 'What role are you preparing for?', 'Tell us what you are aiming for so every question feels relevant.')}<section class="card form-card"><div class="field"><label for="role">Target job title</label><input id="role" value="${state.role || ''}" placeholder="e.g. Machine Learning Engineer"></div><p id="job-title-help" class="muted" style="min-height:18px;margin:0 0 8px;">${state.role?.trim() ? '' : 'Job title is required'}</p><div class="field"><label for="description">Paste the job description <span class="muted">(optional)</span></label><textarea id="description" placeholder="Paste the job description here (optional)">${state.jobDescription || ''}</textarea></div><div class="field"><label>Interview type</label><div class="option-grid">${['Technical Interview','HR Interview','Behavioral Interview','Mixed Interview'].map(x => `<button class="option ${state.type === x ? 'selected' : ''}" data-option="type" data-value="${x}"><strong>${x}</strong><span>${x === 'Mixed Interview' ? 'A balanced session' : 'Focused practice'}</span></button>`).join('')}</div></div><div class="form-row"><div class="field"><label>Difficulty</label><div class="option-grid three">${['Beginner','Intermediate','Advanced'].map(x => `<button class="option ${state.difficulty === x ? 'selected' : ''}" data-option="difficulty" data-value="${x}"><strong>${x}</strong></button>`).join('')}</div></div><div class="field"><label>Duration</label><div class="option-grid three">${['15 min','30 min','45 min','60 min'].map(x => `<button class="option ${state.duration === x ? 'selected' : ''}" data-option="duration" data-value="${x}"><strong>${x}</strong></button>`).join('')}</div></div></div><div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><button class="btn btn-secondary" data-view="resume">Back</button><button class="btn btn-primary" id="prepare-interview" ${state.role?.trim() ? '' : 'disabled'}>Start interview ${icon('arrow')}</button></div></section></main>`); }
 function lobby() { shell(`<main class="page lobby">${pageHeading('Step 3 of 3', "You're all set.", 'Take a breath. Your session is prepared and ready when you are.')}<section class="lobby-grid"><div class="interviewer-preview"><div class="ai-face">AI</div><div class="preview-copy"><span class="status"><i class="live-dot"></i> Ready</span><strong>Alex — AI Interviewer</strong><span style="color:#afc4e3">Your personal practice partner</span></div></div><article class="card summary-card"><p class="eyebrow">Session summary</p><div class="summary-list"><div class="summary-item"><span>Role</span><strong>${state.role}</strong></div><div class="summary-item"><span>Interview</span><strong>${state.type.replace(' Interview','')} + Behavioral</strong></div><div class="summary-item"><span>Difficulty</span><strong>${state.difficulty}</strong></div><div class="summary-item"><span>Duration</span><strong>${state.duration}</strong></div><div class="summary-item"><span>Questions</span><strong>Personalized by AI</strong></div></div><p class="subtle" style="font-size:12px">Your interviewer will ask questions based on your resume and target role.</p><button class="btn btn-primary" style="width:100%;margin-top:18px" data-view="interview">Enter interview ${icon('arrow')}</button><button class="btn btn-quiet" style="width:100%;margin-top:13px" data-view="setup">Review setup</button></article></section></main>`); }
@@ -447,6 +458,18 @@ async function loadUserData() {
   }
 }
 function render() { ({ dashboard: accountDashboard, resume, setup, lobby, interview: realtimeLiveInterview, results: resultsFromApi, history: accountHistory, profile: accountProfile, auth }[state.view] || accountDashboard)(); }
+function showLeaveWarning(onConfirm) {
+  const existing = document.querySelector('#leave-warning-modal');
+  if (existing) existing.remove();
+  const backdrop = document.createElement('div');
+  backdrop.id = 'leave-warning-modal';
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="leave-warning-title"><p class="eyebrow">Leave interview</p><h2 id="leave-warning-title">Leave this interview?</h2><p class="subtle">Your progress is saved, but the current session will be marked incomplete if you leave.</p><div class="modal-actions"><button class="btn btn-secondary" id="stay-in-interview" type="button">Stay</button><button class="btn btn-danger" id="leave-interview" type="button">Leave</button></div></div>`;
+  document.body.append(backdrop);
+  backdrop.querySelector('#stay-in-interview').addEventListener('click', () => backdrop.remove());
+  backdrop.querySelector('#leave-interview').addEventListener('click', () => { backdrop.remove(); onConfirm?.(); });
+}
+
 let timerId;
 function startTimer() { clearInterval(timerId); timerId = setInterval(() => { if (state.view !== 'interview') return clearInterval(timerId); state.timer = Math.max(0, state.timer - 1); const timer = document.querySelector('#timer'); if (timer) timer.textContent = formatTime(state.timer); if (state.timer === 0) { clearInterval(timerId); showEndModal(); } }, 1000); }
 async function removeUserData() {
@@ -467,7 +490,15 @@ function bindEvents() {
   document.querySelector('#buy-credits')?.addEventListener('click', showCreditsPanel);
   document.querySelector('#profile-logout')?.addEventListener('click', logout);
   document.querySelector('#profile-remove-data')?.addEventListener('click', removeUserData);
-  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; render(); }));
+  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+    const nextView = button.dataset.view;
+    if (state.view === 'interview' && nextView !== 'interview') {
+      showLeaveWarning(() => { state.view = nextView; render(); });
+      return;
+    }
+    state.view = nextView;
+    render();
+  }));
   document.querySelectorAll('[data-option]').forEach(button => button.addEventListener('click', () => { state[button.dataset.option] = button.dataset.value; render(); }));
   document.querySelectorAll('.filter').forEach(button => button.addEventListener('click', () => { document.querySelectorAll('.filter').forEach(item => item.classList.remove('active')); button.classList.add('active'); showToast('Filter updated', `Showing ${button.textContent.toLowerCase()} sessions.`); }));
   document.querySelectorAll('.review-toggle').forEach(button => button.addEventListener('click', () => button.closest('.review-item').classList.toggle('open')));
@@ -498,5 +529,12 @@ async function handleFile(file) { if (!file) return; const valid = ['application
   const finalResult = document.querySelector('#resume-result'); if (finalResult) { finalResult.innerHTML = resumeResult(); bindEvents(); syncResumeGate(); if (!state.resumeError) showToast('Resume analyzed', 'Your interview context is ready.'); }
 }
 function showEndModal() { const backdrop = document.createElement('div'); backdrop.className = 'modal-backdrop'; backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="end-title"><p class="eyebrow">Finish session</p><h2 id="end-title">End this interview?</h2><p class="subtle">Your progress will be saved and you will receive a performance summary.</p><div class="modal-actions"><button class="btn btn-secondary" id="cancel-end">Cancel</button><button class="btn btn-danger" id="confirm-end">End interview</button></div></div>`; document.body.append(backdrop); backdrop.querySelector('#cancel-end').addEventListener('click', () => backdrop.remove()); backdrop.querySelector('#confirm-end').addEventListener('click', async () => { cleanupRealtimeInterview(); if (getAuthToken() && state.interviewId) { try { await interviewApi.end(state.interviewId); state.creditBalance = (await userApi.credits()).balance_minutes; } catch (error) { showToast('Could not save interview', error.message); return; } } backdrop.remove(); state.interviewState = 'INTERVIEW_COMPLETE'; state.view = 'results'; render(); }); }
+window.addEventListener('beforeunload', event => {
+  if (state.view === 'interview' && state.interviewId) {
+    event.preventDefault();
+    event.returnValue = 'You have an interview in progress. Are you sure you want to leave?';
+    return event.returnValue;
+  }
+});
 render();
 loadUserData();

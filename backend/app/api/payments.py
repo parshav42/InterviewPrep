@@ -21,8 +21,8 @@ from app.services.credit_service import grant_minutes
 router = APIRouter()
 settings = get_settings()
 PLANS = {
-    "starter": {"credits": 60, "amount_paise": 0},
-    "pro": {"credits": 300, "amount_paise": 49900},
+    "starter": {"interviews": 60, "amount_paise": 0},
+    "pro": {"interviews": 300, "amount_paise": 49900},
 }
 
 
@@ -69,21 +69,21 @@ def create_order(
 ) -> dict:
     plan = PLANS[payload.plan]
     if payload.plan == "starter":
-        credit = grant_minutes(db, user.id, plan["credits"], "starter", tx_type="PURCHASE")
+        credit = grant_minutes(db, user.id, plan["interviews"], "starter", tx_type="PURCHASE")
         db.commit()
-        return {"free": True, "credits_added": plan["credits"], "balance_minutes": credit.balance_minutes}
+        return {"free": True, "credits_added": plan["interviews"], "interviews_added": plan["interviews"], "balance_minutes": credit.balance_minutes, "balance_interviews": credit.balance_minutes}
 
     razorpay_order = _client().order.create({
         "amount": plan["amount_paise"],
         "currency": "INR",
         "receipt": f"{user.id}-{int(time.time())}",
-        "notes": {"user_id": str(user.id), "credits_minutes": str(plan["credits"])},
+        "notes": {"user_id": str(user.id), "credits_minutes": str(plan["interviews"])},
     })
     order = PaymentOrder(
         user_id=user.id,
         razorpay_order_id=razorpay_order["id"],
         amount_paise=plan["amount_paise"],
-        credits_minutes=plan["credits"],
+        credits_minutes=plan["interviews"],
         status="CREATED",
     )
     db.add(order)
@@ -93,6 +93,7 @@ def create_order(
         "amount_paise": order.amount_paise,
         "key_id": settings.razorpay_key_id,
         "credits": order.credits_minutes,
+        "interviews": order.credits_minutes,
     }
 
 
@@ -113,7 +114,7 @@ def verify_payment(
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment order not found")
     balance = _fulfill_order(db, order, payload.razorpay_payment_id)
-    return {"status": "paid", "balance_minutes": balance}
+    return {"status": "paid", "balance_minutes": balance, "balance_interviews": balance}
 
 
 @router.post("/webhook")

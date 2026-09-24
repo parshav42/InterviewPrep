@@ -35,11 +35,11 @@ def test_create_order_for_starter_grants_credits(client):
     response = client.post("/api/payments/create-order", headers=headers, json={"plan": "starter"})
     assert response.status_code == 200
     assert response.json()["free"] is True
-    assert response.json()["credits_added"] == 60
+    assert response.json()["credits_added"] == 1
     with SessionLocal() as db:
         credit = db.query(Credit).one()
-        assert credit.balance_minutes == 120
-        assert db.query(CreditTransaction).filter_by(transaction_type="PURCHASE").one().amount_minutes == 60
+        assert credit.balance_minutes == 2
+        assert db.query(CreditTransaction).filter_by(transaction_type="PURCHASE").one().amount_minutes == 1
 
 
 def test_create_order_for_pro_uses_server_catalog(client, monkeypatch):
@@ -52,7 +52,7 @@ def test_create_order_for_pro_uses_server_catalog(client, monkeypatch):
     with SessionLocal() as db:
         order = db.query(PaymentOrder).one()
         assert order.status == "CREATED"
-        assert order.credits_minutes == 300
+        assert order.credits_minutes == 10
 
 
 def test_verify_valid_signature_grants_once(client, monkeypatch):
@@ -64,8 +64,8 @@ def test_verify_valid_signature_grants_once(client, monkeypatch):
     payload["razorpay_signature"] = sign("payment-secret", f"{payload['razorpay_order_id']}|{payload['razorpay_payment_id']}".encode())
     first = client.post("/api/payments/verify", headers=headers, json=payload)
     second = client.post("/api/payments/verify", headers=headers, json=payload)
-    assert first.json()["balance_minutes"] == 360
-    assert second.json()["balance_minutes"] == 360
+    assert first.json()["balance_minutes"] == 11
+    assert second.json()["balance_minutes"] == 11
     with SessionLocal() as db:
         assert db.query(CreditTransaction).filter_by(transaction_type="PURCHASE").count() == 1
 

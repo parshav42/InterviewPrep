@@ -23,7 +23,8 @@ def profile(user: Annotated[User, Depends(current_user)]) -> UserResponse:
 @router.get("/credits")
 def credits(user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> dict[str, int]:
     credit = db.scalar(select(Credit).where(Credit.user_id == user.id))
-    return {"balance_minutes": credit.balance_minutes if credit else 0}
+    balance = credit.balance_minutes if credit else 0
+    return {"balance_minutes": balance, "balance_interviews": balance}
 
 
 @router.patch("/profile", response_model=UserResponse)
