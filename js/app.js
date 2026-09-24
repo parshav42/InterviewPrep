@@ -125,7 +125,7 @@ async function refreshCredits() {
     console.error('refreshCredits failed', error);
   }
 }
-async async function purchasePlan(plan) {
+async function purchasePlan(plan) {
   try {
     const response = await paymentApi.createOrder(plan);
     document.querySelector('#credits-panel')?.remove();
