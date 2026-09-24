@@ -1,4 +1,8 @@
-export const API_BASE_URL = window.INTERVIEW_API_BASE || 'http://127.0.0.1:8002/api';
+export const API_BASE_URL = (() => {
+  const host = window.location.hostname;
+  const isLocal = host === '127.0.0.1' || host === 'localhost';
+  return isLocal ? 'http://127.0.0.1:8002/api' : '/api';
+})();
 
 function apiUrl(path) {
   const normalizedPath = path.startsWith('/api/') ? path.slice(4) : path;
