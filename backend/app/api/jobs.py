@@ -19,6 +19,11 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 @router.post("", response_model=JobResponse, status_code=201)
 async def create_job(payload: JobCreate, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> Job:
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Job title is required")
+    payload.title = title
+    payload.job_description = payload.job_description or ""
     try:
         analysis, result = await get_structured_llm_service().analyze_job_description(payload.title, payload.job_description)
     except (ValueError, LLMProviderError) as exc:

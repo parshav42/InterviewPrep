@@ -60,7 +60,9 @@ def interviewer_context(interview: Interview, user: User, db: Session, instructi
 
 @router.post("", response_model=InterviewResponse, status_code=201)
 def create_interview(payload: InterviewCreate, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> Interview:
-    if payload.resume_id and not db.scalar(select(Resume).where(Resume.id == payload.resume_id, Resume.user_id == user.id, Resume.deleted_at.is_(None))):
+    if not payload.resume_id:
+        raise HTTPException(status_code=422, detail="A resume is required to start an interview")
+    if not db.scalar(select(Resume).where(Resume.id == payload.resume_id, Resume.user_id == user.id, Resume.deleted_at.is_(None))):
         raise HTTPException(status_code=404, detail="Resume not found")
     if payload.job_id and not db.scalar(select(Job).where(Job.id == payload.job_id, Job.user_id == user.id)):
         raise HTTPException(status_code=404, detail="Job not found")
