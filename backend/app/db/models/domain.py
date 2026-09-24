@@ -83,6 +83,7 @@ class Answer(Base):
     audio_storage_key: Mapped[str | None] = mapped_column(String(500))
     answered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     response_duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    quality_signal: Mapped[str | None] = mapped_column(String(30), default="normal")
 
 
 class Feedback(Base):

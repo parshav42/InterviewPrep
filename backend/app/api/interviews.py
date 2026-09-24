@@ -35,14 +35,36 @@ def owned_interview(interview_id: UUID, user_id: UUID, db: Session) -> Interview
     return interview
 
 
+def classify_answer_quality(answer_text: str) -> str:
+    cleaned = " ".join(str(answer_text or "").strip().split())
+    normalized = cleaned.lower()
+    if not cleaned:
+        return "vague"
+    filler_patterns = ("i don't know", "i do not know", "not sure", "no idea", "unsure", "can't answer", "cannot answer")
+    if any(pattern in normalized for pattern in filler_patterns):
+        return "vague"
+    emotional_patterns = ("frustrated", "annoyed", "nervous", "upset", "angry", "confused", "stressed", "panicked", "overwhelmed", "lost", "sorry", "feels bad", "feeling bad", "bad experience")
+    if any(pattern in normalized for pattern in emotional_patterns):
+        return "emotional"
+    if len(cleaned.split()) < 10:
+        return "short"
+    strong_keywords = ("project", "design", "metrics", "team", "customer", "experience", "implementation", "architecture", "analysis", "leadership", "python", "performance", "data", "resume", "process", "impact", "outcome", "measurable", "improve", "tradeoff", "problem", "solution")
+    if len(cleaned.split()) >= 8 and any(keyword in normalized for keyword in strong_keywords):
+        return "strong"
+    return "normal"
+
+
 def interviewer_context(interview: Interview, user: User, db: Session, instruction: str) -> str:
     resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
     job = db.get(Job, interview.job_id) if interview.job_id else None
     history = []
     questions = db.scalars(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id).order_by(InterviewQuestion.question_number)).all()
+    last_quality = "none"
     for item in questions:
-        answer = db.scalar(select(Answer).where(Answer.question_id == item.id))
+        answer = db.scalar(select(Answer).where(Answer.question_id == item.id).order_by(Answer.answered_at.desc()))
         history.append(f"Q{item.question_number}: {item.question_text}\nA{item.question_number}: {answer.answer_text if answer else '[not answered]'}")
+        if answer and answer.quality_signal:
+            last_quality = answer.quality_signal
     return (
         f"Candidate name: {user.full_name}\n"
         f"Role: {job.title if job else 'Target role'}\n"
@@ -51,6 +73,7 @@ def interviewer_context(interview: Interview, user: User, db: Session, instructi
         f"Job analysis: {(job.parsed_analysis_json if job else {})}\n"
         f"Interview type: {interview.interview_type}\n"
         f"Difficulty: {interview.difficulty}\n"
+        f"Last answer quality: {last_quality}\n"
         f"Previous questions and answers:\n{'\n'.join(history) or '[none]'}\n"
         f"Current question number: {len(questions) + 1}\n"
         f"Maximum questions: {get_settings().max_interview_questions}\n"
@@ -73,9 +96,30 @@ def create_interview(payload: InterviewCreate, user: Annotated[User, Depends(cur
     return interview
 
 
-@router.get("", response_model=list[InterviewResponse])
-def list_interviews(user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> list[Interview]:
-    return list(db.scalars(select(Interview).where(Interview.user_id == user.id).order_by(Interview.created_at.desc())))
+@router.get("")
+def list_interviews(user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> list[dict]:
+    interviews: list[dict] = []
+    for interview in db.scalars(select(Interview).where(Interview.user_id == user.id).order_by(Interview.created_at.desc())).all():
+        score = interview.overall_score
+        if score is None:
+            score_row = db.scalar(select(Feedback).join(Answer, Feedback.answer_id == Answer.id).join(InterviewQuestion, Answer.question_id == InterviewQuestion.id).where(InterviewQuestion.interview_id == interview.id).order_by(Feedback.created_at.desc()).limit(1))
+            if score_row is not None:
+                score = (score_row.technical_score + score_row.communication_score + score_row.relevance_score + score_row.clarity_score + score_row.confidence_score) / 5
+        interviews.append({
+            "id": interview.id,
+            "user_id": interview.user_id,
+            "resume_id": interview.resume_id,
+            "job_id": interview.job_id,
+            "interview_type": interview.interview_type,
+            "difficulty": interview.difficulty,
+            "duration_target_minutes": interview.duration_target_minutes,
+            "started_at": interview.started_at,
+            "ended_at": interview.ended_at,
+            "duration_seconds": interview.actual_duration_seconds,
+            "score": score,
+            "created_at": interview.created_at,
+        })
+    return interviews
 
 
 @router.get("/{interview_id}", response_model=InterviewResponse)
@@ -123,6 +167,7 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     existing_feedback = db.scalar(select(Feedback).join(Answer, Feedback.answer_id == Answer.id).where(Answer.question_id == question.id, Answer.user_id == user.id))
     if existing_feedback:
         return existing_feedback
+    quality_signal = classify_answer_quality(answer_text)
     resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
     job = db.get(Job, interview.job_id) if interview.job_id else None
     interview_context = interviewer_context(interview, user, db, "Evaluate the candidate's answer.")
@@ -130,7 +175,7 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
         evaluation, result = await get_structured_llm_service().evaluate_answer(question.question_text, answer_text, interview_context)
     except (ValueError, LLMProviderError) as exc:
         raise HTTPException(status_code=502, detail="Answer evaluation is temporarily unavailable") from exc
-    answer = Answer(question_id=question.id, user_id=user.id, answer_text=answer_text, response_duration_seconds=payload.response_duration_seconds)
+    answer = Answer(question_id=question.id, user_id=user.id, answer_text=answer_text, response_duration_seconds=payload.response_duration_seconds, quality_signal=quality_signal)
     db.add(answer)
     db.flush()
     feedback = Feedback(answer_id=answer.id, technical_score=evaluation.technical_accuracy, communication_score=evaluation.communication, relevance_score=evaluation.relevance, clarity_score=evaluation.depth, confidence_score=evaluation.problem_solving, strengths=evaluation.strengths, weaknesses=evaluation.weaknesses, suggestions=[evaluation.recommended_followup] if evaluation.recommended_followup else [], ai_feedback=evaluation.feedback)
@@ -193,10 +238,16 @@ def current_question(interview_id: UUID, user: Annotated[User, Depends(current_u
 
 
 @router.post("/{interview_id}/end", response_model=InterviewResponse)
-async def end_interview(interview_id: UUID, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> Interview:
+async def end_interview(interview_id: UUID, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)], abandon: bool = False) -> Interview:
     interview = owned_interview(interview_id, user.id, db)
     if interview.status not in (InterviewStatus.IN_PROGRESS, InterviewStatus.CREATED):
         raise HTTPException(status_code=409, detail="Interview is already finished")
+    if abandon:
+        interview.status = InterviewStatus.IN_PROGRESS
+        interview.ended_at = None
+        db.commit()
+        db.refresh(interview)
+        return interview
     evaluations = db.execute(select(Feedback, Answer, InterviewQuestion).join(Answer, Feedback.answer_id == Answer.id).join(InterviewQuestion, Answer.question_id == InterviewQuestion.id).where(InterviewQuestion.interview_id == interview.id)).all()
     resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
     job = db.get(Job, interview.job_id) if interview.job_id else None

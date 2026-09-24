@@ -40,6 +40,30 @@ def delete_account(user: Annotated[User, Depends(current_user)], db: Annotated[S
     db.commit()
 
 
+@router.delete("/data")
+def delete_user_data(user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> dict[str, dict[str, int]]:
+    from app.db.models.domain import AnalyticsEvent, Answer, Feedback, InterviewQuestion
+
+    interview_ids = db.scalars(select(Interview.id).where(Interview.user_id == user.id)).all()
+    answer_ids = db.scalars(select(Answer.id).where(Answer.user_id == user.id)).all()
+    removed = {
+        "resumes": len(db.scalars(select(Resume.id).where(Resume.user_id == user.id)).all()),
+        "jobs": len(db.scalars(select(Job.id).where(Job.user_id == user.id)).all()),
+        "interviews": len(interview_ids),
+    }
+    if answer_ids:
+        db.query(Feedback).filter(Feedback.answer_id.in_(answer_ids)).delete(synchronize_session=False)
+    db.query(Answer).filter(Answer.user_id == user.id).delete(synchronize_session=False)
+    if interview_ids:
+        db.query(InterviewQuestion).filter(InterviewQuestion.interview_id.in_(interview_ids)).delete(synchronize_session=False)
+    db.query(AnalyticsEvent).filter(AnalyticsEvent.user_id == user.id).delete(synchronize_session=False)
+    db.query(Interview).filter(Interview.user_id == user.id).delete(synchronize_session=False)
+    db.query(Job).filter(Job.user_id == user.id).delete(synchronize_session=False)
+    db.query(Resume).filter(Resume.user_id == user.id).delete(synchronize_session=False)
+    db.commit()
+    return {"removed": {"resumes": removed["resumes"], "jobs": removed["jobs"], "interviews": removed["interviews"]}}
+
+
 @router.get("/export")
 def export_account(user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> JSONResponse:
     resumes = db.scalars(select(Resume).where(Resume.user_id == user.id)).all()
