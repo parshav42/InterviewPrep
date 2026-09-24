@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,6 +34,20 @@ def owned_interview(interview_id: UUID, user_id: UUID, db: Session) -> Interview
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found")
     return interview
+
+
+def fallback_final_feedback(evaluations: list[tuple[Feedback, Answer, InterviewQuestion]] | None) -> FinalFeedback:
+    if evaluations:
+        score_values = []
+        for feedback, _, _ in evaluations:
+            values = [feedback.technical_score, feedback.communication_score, feedback.relevance_score, feedback.clarity_score, feedback.confidence_score]
+            score_values.append(sum(values) / len(values))
+        overall_score = round(sum(score_values) / len(score_values), 1)
+        summary = "Final feedback could not be generated because the analysis service was unavailable. The results below reflect the answer evaluations captured during the interview."
+    else:
+        overall_score = 0.0
+        summary = "Final feedback could not be generated because the analysis service was unavailable."
+    return FinalFeedback(overall_score=overall_score, summary=summary, strengths=[], weaknesses=[], recommended_practice=[])
 
 
 def classify_answer_quality(answer_text: str) -> str:
@@ -133,7 +148,12 @@ async def start_interview(interview_id: UUID, user: Annotated[User, Depends(curr
     if interview.status not in (InterviewStatus.CREATED, InterviewStatus.IN_PROGRESS):
         raise HTTPException(status_code=409, detail="Interview cannot be started")
     interview.status = InterviewStatus.IN_PROGRESS
-    debit_interviews(db, user.id, 1, str(interview.id))
+    try:
+        debit_interviews(db, user.id, 1, str(interview.id))
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_402_PAYMENT_REQUIRED:
+            return JSONResponse(status_code=402, content={"detail": "no_credits", "message": "You've used all your interviews. Buy more to continue."})
+        raise
     interview.started_at = interview.started_at or datetime.now(timezone.utc)
     if not db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id)):
         try:
@@ -200,7 +220,7 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
         try:
             final_feedback, final_result = await get_structured_llm_service().generate_final_feedback(interview_context, evaluation_payload)
         except (ValueError, LLMProviderError):
-            final_feedback = FinalFeedback(overall_score=evaluation.overall_score, summary="Interview completed with the available answer evaluation.", strengths=evaluation.strengths, weaknesses=evaluation.weaknesses, recommended_practice=[evaluation.recommended_followup] if evaluation.recommended_followup else [])
+            final_feedback = fallback_final_feedback(evaluations)
         interview.ended_at = datetime.now(timezone.utc)
         interview.status = InterviewStatus.COMPLETED
         interview.final_feedback_json = final_feedback.model_dump()
@@ -281,7 +301,10 @@ async def end_interview(interview_id: UUID, user: Annotated[User, Depends(curren
         try:
             final_feedback, final_result = await get_structured_llm_service().generate_final_feedback(interview_context, evaluation_payload)
         except (ValueError, LLMProviderError) as exc:
-            raise HTTPException(status_code=502, detail="Final interview feedback is temporarily unavailable") from exc
+            logger = __import__("logging").getLogger(__name__)
+            logger.exception("Final interview feedback generation failed")
+            final_feedback = fallback_final_feedback(evaluations)
+            final_result = None
         interview.ended_at = datetime.now(timezone.utc)
         interview.status = InterviewStatus.COMPLETED
         interview.final_feedback_json = final_feedback.model_dump()

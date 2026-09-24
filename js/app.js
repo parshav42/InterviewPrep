@@ -349,7 +349,15 @@ async function ensureInterviewStarted() {
   if (state.currentQuestionId) return;
   if (!state.startPromise) {
     state.startPromise = (async () => {
-      await interviewApi.start(state.interviewId);
+      try {
+        await interviewApi.start(state.interviewId);
+      } catch (error) {
+        if (error?.status === 402 || error?.detail === 'no_credits') {
+          openBuyPanel();
+          throw error;
+        }
+        throw error;
+      }
       const question = await interviewApi.currentQuestion(state.interviewId);
       state.currentQuestionId = question.id;
       state.remoteQuestion = question.question_text;
@@ -421,6 +429,12 @@ async function initializeRealtimeInterview() {
     await ensureInterviewStarted();
     if (state.view === 'interview' && !document.querySelector('#user-video')) render();
   } catch (error) {
+    if (error?.status === 402 || error?.detail === 'no_credits') {
+      state.voiceInitialized = false;
+      openBuyPanel();
+      setRealtimeState('IDLE', 'Interview needs credits.');
+      return;
+    }
     state.voiceInitialized = false;
     setRealtimeState('IDLE', 'AI interviewer is temporarily unavailable.');
     showToast('Interview could not start', error.message);
@@ -653,7 +667,7 @@ function bindEvents() {
   document.querySelector('#description')?.addEventListener('input', event => { state.jobDescription = event.target.value; });
   const setupButton = document.querySelector('#prepare-interview');
   if (setupButton) { setupButton.disabled = !String(state.role || '').trim(); }
-  document.querySelector('#prepare-interview')?.addEventListener('click', async () => { state.role = (document.querySelector('#role')?.value || '').trim(); state.jobDescription = document.querySelector('#description')?.value || ''; if (!state.role) { syncJobSetupValidation(); showToast('Job title is required'); return; } showToast('Preparing your interview', 'Generating personalized questions...'); if (getAuthToken()) { try { const job = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ title: state.role, job_description: state.jobDescription }) }); const interview = await interviewApi.create({ job_id: job.id, resume_id: state.resume?.id || null, interview_type: state.type, difficulty: state.difficulty, duration_target_minutes: Number.parseInt(state.duration, 10) }); state.interviewId = interview.id; await interviewApi.start(state.interviewId); const question = await interviewApi.currentQuestion(state.interviewId); state.currentQuestionId = question.id; state.remoteQuestion = question.question_text; state.question = question.question_number; state.view = 'interview'; render(); return; } catch (error) { showToast('Interview setup failed', error.message); return; } } state.view = 'interview'; render(); });
+  document.querySelector('#prepare-interview')?.addEventListener('click', async () => { state.role = (document.querySelector('#role')?.value || '').trim(); state.jobDescription = document.querySelector('#description')?.value || ''; if (!state.role) { syncJobSetupValidation(); showToast('Job title is required'); return; } showToast('Preparing your interview', 'Generating personalized questions...'); if (getAuthToken()) { try { const job = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ title: state.role, job_description: state.jobDescription }) }); const interview = await interviewApi.create({ job_id: job.id, resume_id: state.resume?.id || null, interview_type: state.type, difficulty: state.difficulty, duration_target_minutes: Number.parseInt(state.duration, 10) }); state.interviewId = interview.id; await interviewApi.start(state.interviewId); const question = await interviewApi.currentQuestion(state.interviewId); state.currentQuestionId = question.id; state.remoteQuestion = question.question_text; state.question = question.question_number; state.view = 'interview'; render(); return; } catch (error) { if (error?.status === 402 || error?.detail === 'no_credits') { openBuyPanel(); return; } showToast('Interview setup failed', error.message); return; } } state.view = 'interview'; render(); });
   document.querySelector('[data-view="interview"]')?.addEventListener('click', async () => { if (getAuthToken() && state.interviewId) { try { await ensureInterviewStarted(); render(); } catch (error) { showToast('Interview could not start', error.message); } } });
   document.querySelector('#camera-toggle')?.addEventListener('click', toggleCamera);
   document.querySelector('#speaker-toggle')?.addEventListener('click', event => { state.speaker = !state.speaker; if (!state.speaker) { state.textToSpeech?.stop(); if (state.interviewState === 'AI_SPEAKING') beginListening(); } updateRealtimeMediaUi(); showToast(state.speaker ? 'Speaker on' : 'Speaker off'); });

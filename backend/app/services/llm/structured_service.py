@@ -72,4 +72,11 @@ class StructuredLLMService:
         return await self._structured([{"role": "system", "content": "Evaluate the answer as JSON. All scores must be numbers from 0 to 100. Include technical_accuracy, communication, depth, relevance, problem_solving, overall_score, strengths, weaknesses, feedback, recommended_followup."}, {"role": "user", "content": f"Context: {context[:18000]}\nQuestion: {question}\nAnswer: {answer[:12000]}"}], AnswerEvaluation)
 
     async def generate_final_feedback(self, interview_context: str, evaluations: str) -> tuple[FinalFeedback, LLMResult]:
-        return await self._structured([{"role": "system", "content": "Summarize the completed interview as JSON with overall_score from 0 to 100, summary, strengths, weaknesses, and recommended_practice."}, {"role": "user", "content": f"Interview context: {interview_context[:18000]}\nEvaluations: {evaluations[:18000]}"}], FinalFeedback)
+        system_prompt = """Analyze the full interview as a performance review. Use the candidate name, resume summary, role title, job description, and every question/answer pair with evaluation notes to judge the candidate question by question. Return JSON with: overall_score (0-100), summary (1-2 sentences), strengths (3-5 specific bullets referencing actual answers), weaknesses (3-5 specific bullets; this is the improvements list), recommended_practice (2-3 specific topics). Do not return generic text or a fixed score. Base every bullet on things the candidate actually said."""
+        user_prompt = (
+            "Interview context:\n"
+            f"{interview_context[:40000]}\n\n"
+            "Question-by-question evaluations:\n"
+            f"{evaluations[:40000]}"
+        )
+        return await self._structured([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], FinalFeedback)

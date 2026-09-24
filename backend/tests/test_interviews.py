@@ -181,6 +181,24 @@ def test_llm_followup_failure_uses_deterministic_question_fallback(client, monke
     assert next_question["question_text"] == "What would you improve or do differently based on that experience?"
 
 
+def test_start_interview_without_credits_returns_no_credits_payload(client):
+    owner = auth_headers(client, "no-credits@example.com")
+    user_id = UUID(client.get("/api/user/profile", headers=owner).json()["id"])
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+
+    with SessionLocal() as db:
+        credit = db.query(Credit).filter(Credit.user_id == user_id).one()
+        credit.balance_minutes = 0
+        db.commit()
+
+    response = client.post(f"/api/interviews/{interview['id']}/start", headers=owner)
+    assert response.status_code == 402
+    payload = response.json()
+    assert payload["detail"] == "no_credits"
+    assert payload["message"] == "You've used all your interviews. Buy more to continue."
+
+
 def test_credit_concurrency_allows_only_one_debit(client):
     owner = auth_headers(client, "credits@example.com")
     user_id = UUID(client.get("/api/user/profile", headers=owner).json()["id"])
