@@ -15,6 +15,9 @@ def normalize_list(value: Any) -> list[str]:
 
 class CandidateProfile(BaseModel):
     name: str | None = None
+    email: str | None = None
+    summary: str | None = None
+    experience_years: int | None = None
     education: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     programming_languages: list[str] = Field(default_factory=list)

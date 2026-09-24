@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.db.models.domain import InterviewStatus
 
@@ -12,12 +12,15 @@ class ResumeResponse(BaseModel):
     original_filename: str
     file_type: str
     file_size: int
-    parsed_profile_json: dict
+    parsed_profile_json: dict = Field(default_factory=dict)
+    extracted_text_preview: str = ""
+    parsed: dict = Field(default_factory=dict)
+    warning: str | None = None
     uploaded_at: datetime
 
 
 class JobCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=180)
+    title: str = Field(max_length=180)
     company_name: str | None = Field(default=None, max_length=180)
     job_description: str = Field(default="", max_length=30000)
 

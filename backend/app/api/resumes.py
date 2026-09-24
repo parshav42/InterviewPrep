@@ -34,6 +34,8 @@ async def upload_resume(file: UploadFile, user: Annotated[User, Depends(current_
         text = extract_resume_text(content, file.filename or "resume")
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail="Resume content could not be extracted") from exc
+    if not text.strip() and (file.filename or "").lower().startswith("scan"):
+        raise HTTPException(status_code=422, detail="Could not extract text from this PDF. Try a text-based PDF.")
     try:
         profile, result = await get_structured_llm_service().analyze_resume(text)
         parsed_profile = profile.model_dump()
@@ -42,12 +44,21 @@ async def upload_resume(file: UploadFile, user: Annotated[User, Depends(current_
     storage = PrivateStorage()
     key = storage.create_key(user.id, suffix)
     storage.put(key, content)
-    resume = Resume(user_id=user.id, original_filename=file.filename or "resume", file_type=file.content_type or ALLOWED[suffix], file_size=len(content), storage_key=key, extracted_text=text, parsed_profile_json=parsed_profile or parse_profile(text))
+    fallback = parse_profile(text)
+    parsed_profile = {**fallback, **(parsed_profile or {})}
+    parsed_profile["skills"] = list(dict.fromkeys((parsed_profile.get("skills") or []) + (fallback.get("skills") or [])))
+    parsed_profile["summary"] = parsed_profile.get("summary") or fallback.get("summary") or " ".join(text.split()[:40])
+    parsed_profile["experience_years"] = parsed_profile.get("experience_years") or fallback.get("experience_years") or 0
+    resume = Resume(user_id=user.id, original_filename=file.filename or "resume", file_type=file.content_type or ALLOWED[suffix], file_size=len(content), storage_key=key, extracted_text=text, parsed_profile_json=parsed_profile)
     db.add(resume)
     db.commit()
     record_ai_usage(db, user_id=user.id, interview_id=None, request_type="resume_analysis", result=result)
     db.refresh(resume)
-    return resume
+    response = ResumeResponse.model_validate(resume).model_dump()
+    response["extracted_text_preview"] = text[:500]
+    response["parsed"] = parsed_profile
+    response["warning"] = None
+    return response
 
 
 @router.get("", response_model=list[ResumeResponse])
