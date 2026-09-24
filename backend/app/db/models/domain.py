@@ -123,7 +123,7 @@ class Credit(Base):
     __tablename__ = "credits"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
-    balance_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    balance_minutes: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     @property

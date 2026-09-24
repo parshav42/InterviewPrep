@@ -21,8 +21,8 @@ from app.services.credit_service import grant_minutes
 router = APIRouter()
 settings = get_settings()
 PLANS = {
-    "starter": {"interviews": 60, "amount_paise": 0},
-    "pro": {"interviews": 300, "amount_paise": 49900},
+    "starter": {"interviews": 1, "amount_paise": 0},
+    "pro": {"interviews": 10, "amount_paise": 49900},
 }
 
 

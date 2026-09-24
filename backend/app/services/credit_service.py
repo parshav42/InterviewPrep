@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.db.models.domain import Credit, CreditTransaction
 
 
-INITIAL_CREDIT_INTERVIEWS = 60
+INITIAL_CREDIT_INTERVIEWS = 1
 INITIAL_CREDIT_MINUTES = INITIAL_CREDIT_INTERVIEWS
 
 
