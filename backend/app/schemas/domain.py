@@ -74,8 +74,9 @@ class InterviewHistoryResponse(BaseModel):
 
 class AnswerCreate(BaseModel):
     question_id: UUID
-    answer_text: str = Field(min_length=1, max_length=30000)
+    answer_text: str | None = Field(default=None, max_length=30000)
     response_duration_seconds: int | None = Field(default=None, ge=0, le=3600)
+    skipped: bool = False
 
 
 class FeedbackResponse(BaseModel):

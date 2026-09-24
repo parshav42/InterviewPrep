@@ -251,13 +251,34 @@ def test_llm_rate_limit_allows_under_rejects_over_and_resets(client, monkeypatch
 
 
 def test_answer_quality_signal_classification():
-    from app.api.interviews import classify_answer_quality
+    from app.api.interviews import classify_answer, classify_answer_quality
 
+    assert classify_answer("I don't know") == "give_up"
+    assert classify_answer("next question") == "skip"
+    assert classify_answer("") == "empty"
     assert classify_answer_quality("I don't know") == "vague"
     assert classify_answer_quality("I would explain the design and share the measurable outcome.") == "strong"
     assert classify_answer_quality("sorry this feels bad") == "emotional"
     assert classify_answer_quality("three words only") == "short"
     assert classify_answer_quality("I am not sure") == "vague"
+
+
+def test_weak_answers_and_skip_commands_move_forward(client):
+    owner = auth_headers(client, "weak-answers@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    interview_id = interview["id"]
+    assert client.post(f"/api/interviews/{interview_id}/start", headers=owner).status_code == 200
+    current = client.get(f"/api/interviews/{interview_id}/questions/current", headers=owner).json()
+
+    give_up = client.post(f"/api/interviews/{interview_id}/answer", headers=owner, json={"question_id": current["id"], "answer_text": "I don't know"})
+    assert give_up.status_code == 200, give_up.text
+    assert give_up.json()["next_question"]["question_text"] != current["question_text"]
+
+    next_question = client.get(f"/api/interviews/{interview_id}/questions/current", headers=owner).json()
+    skip = client.post(f"/api/interviews/{interview_id}/answer", headers=owner, json={"question_id": next_question["id"], "answer_text": "next question"})
+    assert skip.status_code == 200, skip.text
+    assert skip.json()["next_question"] is not None
 
 
 def test_remove_user_data_deletes_resources(client):

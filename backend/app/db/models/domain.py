@@ -71,6 +71,7 @@ class InterviewQuestion(Base):
     question_text: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(80))
     difficulty: Mapped[str] = mapped_column(String(30))
+    probe_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -84,6 +85,7 @@ class Answer(Base):
     answered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     response_duration_seconds: Mapped[int | None] = mapped_column(Integer)
     quality_signal: Mapped[str | None] = mapped_column(String(30), default="normal")
+    skipped: Mapped[bool] = mapped_column(default=False)
 
 
 class Feedback(Base):

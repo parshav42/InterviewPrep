@@ -4,6 +4,7 @@ import { BrowserSpeechToTextProvider, BrowserTextToSpeechProvider, requestInterv
 const app = document.querySelector('#app');
 const toastRegion = document.querySelector('#toast-region');
 const VOICE_SILENCE_TIMEOUT_MS = 30000;
+const MAX_SILENCE_TIMEOUT_MS = 60000;
 const MIN_ANSWER_LENGTH = 10;
 
 const icons = {
@@ -280,12 +281,52 @@ function showSilencePrompt() {
   render();
 }
 
+async function handleSilenceSkip() {
+  if (state.processingAnswer || state.isSubmitting || !state.interviewId || !state.currentQuestionId) return;
+  try {
+    state.processingAnswer = true;
+    state.isSubmitting = true;
+    const payload = { question_id: state.currentQuestionId, answer_text: '', skipped: true, response_duration_seconds: Math.round((Date.now() - state.answerStartedAt) / 1000) };
+    const response = await interviewApi.answer(state.interviewId, payload);
+    state.processingAnswer = false;
+    state.isSubmitting = false;
+    if (response.is_complete) {
+      state.interviewState = 'INTERVIEW_COMPLETE';
+      cleanupRealtimeInterview();
+      state.view = 'results';
+      render();
+      return;
+    }
+    const next = response.next_question || await interviewApi.currentQuestion(state.interviewId);
+    state.currentQuestionId = next.id;
+    state.remoteQuestion = next.question_text;
+    state.question = next.question_number;
+    state.transcript = '';
+    state.interimTranscript = '';
+    state.silencePrompt = false;
+    render();
+    speakCurrentQuestion();
+  } catch (error) {
+    state.processingAnswer = false;
+    state.isSubmitting = false;
+    showToast('Could not advance interview', normalizeApiError(error));
+  }
+}
+
 function scheduleAnswerSubmission() {
   clearSilenceTimer();
   state.silenceTimer = setTimeout(() => {
     if (!['LISTENING', 'USER_SPEAKING'].includes(state.interviewState)) return;
     if (state.transcript.trim()) submitVoiceAnswer();
-    else showSilencePrompt();
+    else {
+      showSilencePrompt();
+      state.silenceTimer = setTimeout(() => {
+        if (!['LISTENING', 'USER_SPEAKING'].includes(state.interviewState)) return;
+        if (!state.transcript.trim()) {
+          handleSilenceSkip();
+        }
+      }, MAX_SILENCE_TIMEOUT_MS - VOICE_SILENCE_TIMEOUT_MS);
+    }
   }, VOICE_SILENCE_TIMEOUT_MS);
 }
 
@@ -534,7 +575,7 @@ function realtimeLiveInterview() {
     <header class="live-topbar"><div><span class="live-kicker">InterviewAI</span><strong>Live interview</strong></div><div class="live-session">${creditsMarkup()} <span class="live-divider"></span>Question ${state.question} of 10 <span class="live-divider"></span><span id="timer">${formatTime(state.timer)}</span></div></header>
     <div class="live-status" aria-live="polite"><strong id="stage-status">${status}</strong></div>
     <section class="live-stage"><div class="candidate-tile participant user-participant"><video id="user-video" autoplay playsinline muted></video><span class="participant-label">You</span><span class="participant-state" id="camera-status">Camera off</span></div><div class="ai-tile participant ai-participant" id="ai-presence"><div class="video-avatar">AI</div><strong>AI Interviewer</strong><span class="participant-state" id="voice-status">${status}</span></div><div class="stage-timer"><span>Time remaining</span><strong>${formatTime(state.timer)}</strong></div></section>
-    <section class="live-workspace"><article class="interviewer-card"><div class="card-eyebrow"><span>AI INTERVIEWER</span><span class="question-count">Question ${state.question} of 10</span></div><h1>${state.remoteQuestion || 'Waiting for interviewer...'}</h1><span class="question-topic">${state.type.replace(' Interview', '')}</span></article><article class="transcript-card"><div class="transcript-heading"><strong>${candidateSpeaking ? 'Listening...' : 'Your response'}</strong></div><p id="live-transcript-text">${state.silencePrompt ? 'Did you say something?' : (transcript || 'Listening...')}</p>${state.silencePrompt ? '<button class="btn btn-secondary" id="repeat-question" type="button">Repeat question</button>' : ''}${showManualAnswer ? '<div class="manual-answer"><textarea id="manual-answer-input" rows="3" placeholder="Type your answer here..." aria-label="Type your answer"></textarea><button class="btn btn-primary" id="manual-answer-submit" type="button">Submit answer</button></div>' : ''}</article></section>
+    <section class="live-workspace"><article class="interviewer-card"><div class="card-eyebrow"><span>AI INTERVIEWER</span><span class="question-count">Question ${state.question} of 10</span></div><h1>${state.remoteQuestion || 'Waiting for interviewer...'}</h1><span class="question-topic">${state.type.replace(' Interview', '')}</span></article><article class="transcript-card"><div class="transcript-heading"><strong>${candidateSpeaking ? 'Listening...' : 'Your response'}</strong></div><p id="live-transcript-text">${state.silencePrompt ? 'Take your time. You can also type your answer below.' : (transcript || 'Listening...')}</p>${state.silencePrompt ? '<button class="btn btn-secondary" id="repeat-question" type="button">Repeat question</button>' : ''}${showManualAnswer ? '<div class="manual-answer"><textarea id="manual-answer-input" rows="3" placeholder="Type your answer here… (or say \'skip\' to move on)" aria-label="Type your answer"></textarea><button class="btn btn-primary" id="manual-answer-submit" type="button">Submit answer</button><button class="btn btn-quiet" id="skip-question" type="button" style="margin-top:8px">Skip question</button></div>' : ''}</article></section>
     <div class="live-controls"><div class="control-group"><button class="live-control" id="camera-toggle" aria-label="Toggle camera">${icon('video')}<span id="camera-control-label">Camera</span></button><button class="live-control" id="retry-mic" aria-label="Toggle microphone">${icon('mic')}<span id="microphone-status">Microphone</span></button><button class="live-control" id="speaker-toggle" aria-label="Toggle speaker">${icon('speaker')}<span>Speaker</span></button></div><button class="btn btn-danger end" id="end-interview">End interview</button></div>
   </main>`);
   updateRealtimeMediaUi();

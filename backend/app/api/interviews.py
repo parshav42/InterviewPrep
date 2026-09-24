@@ -50,6 +50,24 @@ def fallback_final_feedback(evaluations: list[tuple[Feedback, Answer, InterviewQ
     return FinalFeedback(overall_score=overall_score, summary=summary, strengths=[], weaknesses=[], recommended_practice=[])
 
 
+def classify_answer(text: str) -> str:
+    cleaned = " ".join(str(text or "").strip().split())
+    normalized = cleaned.lower()
+    if not cleaned:
+        return "empty"
+    skip_tokens = ("next question", "next", "skip", "move on", "pass", "can we move on")
+    give_up_tokens = ("i don't know", "i do not know", "dont know", "don't know", "no idea", "not sure", "idk", "don't remember", "do not remember")
+    if any(token in normalized for token in skip_tokens):
+        return "skip"
+    if len(cleaned.split()) < 5 and any(token in normalized for token in give_up_tokens):
+        return "give_up"
+    if len(cleaned.split()) < 5:
+        return "short"
+    if any(token in normalized for token in give_up_tokens):
+        return "give_up"
+    return "normal"
+
+
 def classify_answer_quality(answer_text: str) -> str:
     cleaned = " ".join(str(answer_text or "").strip().split())
     normalized = cleaned.lower()
@@ -67,6 +85,28 @@ def classify_answer_quality(answer_text: str) -> str:
     if len(cleaned.split()) >= 8 and any(keyword in normalized for keyword in strong_keywords):
         return "strong"
     return "normal"
+
+
+def _jaccard_similarity(left: str, right: str) -> float:
+    left_tokens = {token for token in normalized_text(left).split() if token}
+    right_tokens = {token for token in normalized_text(right).split() if token}
+    if not left_tokens and not right_tokens:
+        return 1.0
+    if not left_tokens or not right_tokens:
+        return 0.0
+    union = left_tokens | right_tokens
+    if not union:
+        return 0.0
+    intersection = left_tokens & right_tokens
+    return len(intersection) / len(union)
+
+
+def _unique_next_question_text(interview: Interview, db: Session, base_question_text: str) -> str:
+    question_history = db.scalars(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id).order_by(InterviewQuestion.question_number.desc()).limit(3)).all()
+    for previous in question_history:
+        if previous.question_text and _jaccard_similarity(base_question_text, previous.question_text) > 0.8:
+            return "What would you improve or do differently based on that experience?"
+    return base_question_text
 
 
 def interviewer_context(interview: Interview, user: User, db: Session, instruction: str) -> str:
@@ -175,8 +215,8 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     question = db.scalar(select(InterviewQuestion).where(InterviewQuestion.id == payload.question_id, InterviewQuestion.interview_id == interview.id))
     if interview.status != InterviewStatus.IN_PROGRESS or not question:
         raise HTTPException(status_code=409, detail="Interview question is not active")
-    answer_text = payload.answer_text.strip()
-    if len(answer_text) < MIN_ANSWER_LENGTH or normalized_text(answer_text) == normalized_text(question.question_text):
+    answer_text = payload.answer_text.strip() if payload.answer_text is not None else ""
+    if payload.answer_text is not None and payload.answer_text.strip() == "" and not getattr(payload, "skipped", False):
         raise HTTPException(status_code=422, detail="Please provide a substantive answer before continuing.")
     if interview.started_at:
         started_at = interview.started_at
@@ -187,6 +227,86 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     existing_feedback = db.scalar(select(Feedback).join(Answer, Feedback.answer_id == Answer.id).where(Answer.question_id == question.id, Answer.user_id == user.id))
     if existing_feedback:
         return existing_feedback
+
+    skipped = bool(getattr(payload, "skipped", False))
+    classification = classify_answer(answer_text)
+    if skipped or classification == "skip":
+        answer = Answer(question_id=question.id, user_id=user.id, answer_text=answer_text or "Skipped by candidate.", response_duration_seconds=payload.response_duration_seconds, quality_signal="skipped", skipped=True)
+        db.add(answer)
+        db.flush()
+        next_number = (db.scalar(select(InterviewQuestion.question_number).where(InterviewQuestion.interview_id == interview.id).order_by(InterviewQuestion.question_number.desc()).limit(1)) or 0) + 1
+        followup_result = None
+        final_result = None
+        followup_text = "What would you improve or do differently based on that experience?"
+        followup_category = "Behavioral"
+        followup_difficulty = interview.difficulty
+        if next_number <= get_settings().max_interview_questions:
+            try:
+                followup, followup_result = await get_structured_llm_service().generate_question(interviewer_context(interview, user, db, "The candidate skipped or gave a very weak answer. Acknowledge briefly, then move to a different, relevant question without repeating the same question."))
+                followup_text = _unique_next_question_text(interview, db, followup.question)
+                followup_category = followup.category
+                followup_difficulty = followup.difficulty
+            except (ValueError, LLMProviderError):
+                followup_text = _unique_next_question_text(interview, db, followup_text)
+            db.add(InterviewQuestion(interview_id=interview.id, question_number=next_number, question_text=followup_text, category=followup_category, difficulty=followup_difficulty))
+            db.commit()
+            db.refresh(answer)
+            next_question = db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id, ~select(Answer.id).where(Answer.question_id == InterviewQuestion.id).exists()).order_by(InterviewQuestion.question_number.desc()))
+            response = AnswerResponse.model_construct(
+                id=answer.id,
+                answer_id=answer.id,
+                technical_score=0,
+                communication_score=0,
+                relevance_score=0,
+                clarity_score=0,
+                confidence_score=0,
+                strengths=[],
+                weaknesses=[],
+                suggestions=[],
+                ai_feedback="The candidate skipped this question. Moving to a new one.",
+                created_at=answer.answered_at,
+                next_question=next_question,
+                is_complete=False,
+                feedback_url=None,
+                closing_text=None,
+            )
+            return response
+
+    if len(answer_text) < MIN_ANSWER_LENGTH and classification in {"short", "empty"}:
+        answer = Answer(question_id=question.id, user_id=user.id, answer_text=answer_text or "No answer provided.", response_duration_seconds=payload.response_duration_seconds, quality_signal=classification, skipped=(classification == "empty"))
+        db.add(answer)
+        db.flush()
+        if classification == "empty":
+            followup_text = "No rush — take your time. If you’d rather, tell me about a project or a time you solved a problem."
+            followup_category = "Behavioral"
+            followup_difficulty = interview.difficulty
+            next_number = (db.scalar(select(InterviewQuestion.question_number).where(InterviewQuestion.interview_id == interview.id).order_by(InterviewQuestion.question_number.desc()).limit(1)) or 0) + 1
+            db.add(InterviewQuestion(interview_id=interview.id, question_number=next_number, question_text=_unique_next_question_text(interview, db, followup_text), category=followup_category, difficulty=followup_difficulty))
+            db.commit()
+            next_question = db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id, InterviewQuestion.question_number == next_number))
+            response = AnswerResponse.model_construct(
+                id=answer.id,
+                answer_id=answer.id,
+                technical_score=0,
+                communication_score=0,
+                relevance_score=0,
+                clarity_score=0,
+                confidence_score=0,
+                strengths=[],
+                weaknesses=[],
+                suggestions=[],
+                ai_feedback="No answer was provided; moving to a different question.",
+                created_at=answer.answered_at,
+                next_question=next_question,
+                is_complete=False,
+                feedback_url=None,
+                closing_text=None,
+            )
+            return response
+
+    if normalized_text(answer_text) == normalized_text(question.question_text):
+        raise HTTPException(status_code=422, detail="Please provide a substantive answer before continuing.")
+
     quality_signal = classify_answer_quality(answer_text)
     resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
     job = db.get(Job, interview.job_id) if interview.job_id else None
@@ -206,11 +326,11 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     if next_number <= get_settings().max_interview_questions:
         try:
             followup, followup_result = await get_structured_llm_service().generate_question(interviewer_context(interview, user, db, "Acknowledge the previous answer briefly, then ask the next question."))
-            followup_text = followup.question
+            followup_text = _unique_next_question_text(interview, db, followup.question)
             followup_category = followup.category
             followup_difficulty = followup.difficulty
         except (ValueError, LLMProviderError):
-            followup_text = "What would you improve or do differently based on that experience?"
+            followup_text = _unique_next_question_text(interview, db, "What would you improve or do differently based on that experience?")
             followup_category = "Behavioral"
             followup_difficulty = interview.difficulty
         db.add(InterviewQuestion(interview_id=interview.id, question_number=next_number, question_text=followup_text, category=followup_category, difficulty=followup_difficulty))
