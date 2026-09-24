@@ -76,6 +76,11 @@ def frontend_index() -> FileResponse:
     return FileResponse(project_root / "index.html")
 
 
+@app.get("/admin.html", include_in_schema=False)
+def admin_html_page() -> FileResponse:
+    return FileResponse(project_root / "admin.html")
+
+
 @app.get("/health/llm", tags=["system"])
 async def llm_health() -> dict[str, str | bool]:
     healthy = await get_llm_service().health()
