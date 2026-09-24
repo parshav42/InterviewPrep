@@ -256,9 +256,10 @@ async function submitVoiceAnswer() {
       state.processingAnswer = false;
       state.isSubmitting = false;
       state.interviewState = 'INTERVIEW_COMPLETE';
-      state.view = 'results';
-      cleanupRealtimeInterview();
-      render();
+      const showResults = () => { cleanupRealtimeInterview(); state.view = 'results'; render(); };
+      if (state.feedback.closing_text && state.speaker && state.textToSpeech?.available) {
+        state.textToSpeech.speak(state.feedback.closing_text, { onEnd: showResults, onError: showResults });
+      } else showResults();
       return;
     }
     const next = state.feedback.next_question || await interviewApi.currentQuestion(state.interviewId);

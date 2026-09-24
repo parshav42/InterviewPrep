@@ -90,3 +90,4 @@ class AnswerResponse(FeedbackResponse):
     next_question: QuestionResponse | None = None
     is_complete: bool = False
     feedback_url: str | None = None
+    closing_text: str | None = None

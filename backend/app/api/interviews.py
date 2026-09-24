@@ -175,6 +175,7 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     response.next_question = next_question
     response.is_complete = interview.status == InterviewStatus.COMPLETED
     response.feedback_url = f"/api/interviews/{interview.id}/feedback" if response.is_complete else None
+    response.closing_text = "That wraps up our interview. Thank you for your time - you'll see feedback on your screen shortly." if response.is_complete else None
     return response
 
 
