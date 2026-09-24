@@ -24,10 +24,8 @@ function formatTime(seconds) { return `${String(Math.floor(seconds / 60)).padSta
 function userInitials() { return (state.user?.full_name || 'User').split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase(); }
 function creditsMarkup() {
   const balance = Number.isFinite(state.creditBalance) ? state.creditBalance : 0;
-  const needsTopUp = balance <= 0;
-  return needsTopUp
-    ? '<button class="credits buy-credits" id="buy-credits" type="button">Buy interviews</button>'
-    : `<span class="credits"><i class="credit-dot"></i>Interviews left: ${balance}</span>`;
+  if (balance > 0) return `<span class="credits">Credits: ${balance} interviews</span>`;
+  return '<button class="btn btn-secondary" id="buy-credits" type="button">Buy</button>';
 }
 function header() { return `<header class="topbar"><button class="brand" data-view="dashboard" aria-label="Go to dashboard"><span class="brand-text">InterviewAI</span></button><nav class="nav-links" aria-label="Primary"><button class="nav-link ${state.view === 'dashboard' ? 'active' : ''}" data-view="dashboard">Dashboard</button><button class="nav-link ${['resume','setup','lobby','interview'].includes(state.view) ? 'active' : ''}" data-view="resume">Practice</button><button class="nav-link ${state.view === 'history' ? 'active' : ''}" data-view="history">History</button></nav><div class="nav-actions">${creditsMarkup()}<button class="profile-chip" data-view="profile"><span class="avatar">${userInitials()}</span><span>${state.user?.full_name || 'Account'}</span><span>⌄</span></button><button class="icon-btn mobile-menu" aria-label="Open menu">☰</button></div></header>`; }
 function resetUserState() { cleanupRealtimeInterview(); Object.assign(state, { view: 'auth', user: null, resumes: [], jobs: [], interviews: [], resume: null, resumeError: null, role: '', jobDescription: '', interviewId: null, currentQuestionId: null, remoteQuestion: null, transcript: '', interimTranscript: '', feedback: null, interviewState: 'IDLE' }); }
@@ -93,15 +91,31 @@ function syncJobSetupValidation() {
   if (button) button.disabled = !enabled;
   if (helper) helper.textContent = enabled ? '' : 'Job title is required';
 }
-function resume() {
-  const resume = getLatestResume();
-  if (resume && !state.resume) state.resume = resume;
-  shell(`<main class="page">${pageHeading('Step 1 of 3', 'Build your personalized interview', "Upload your resume and we'll tailor the interview to your experience.")}<section class="card form-card"><div class="upload-zone" id="upload-zone"><div class="upload-icon">${icon('upload')}</div><h3>Drag & drop your resume here</h3><p class="subtle" style="margin-bottom:0">or <label for="resume-input">browse files</label></p><input id="resume-input" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><p class="upload-help">PDF or DOCX · Maximum 10MB</p></div><div id="resume-result"></div><div style="display:flex;justify-content:flex-end;align-items:center;flex-direction:column;gap:8px;margin-top:24px"><button class="btn btn-primary" data-view="setup" ${canContinueToSetup() ? '' : 'disabled'}>Continue to job setup ${icon('arrow')}</button><p id="resume-gate-help" class="muted" style="margin:0;min-height:20px;">${canContinueToSetup() ? '' : 'Upload a resume to continue'}</p></div></section></main>`);
+async function resume() {
+  let items = [];
+  try {
+    const response = await resumeApi.list();
+    items = Array.isArray(response) ? response : (response?.items ?? []);
+    state.resumes = items;
+  } catch (error) {
+    console.warn('Could not load resumes', error);
+    items = state.resumes || [];
+  }
+  const savedResume = items.find(item => item.id === state.resume?.id) || items[0] || null;
+  if (savedResume) {
+    state.resume = { ...savedResume, name: savedResume.original_filename || savedResume.name };
+    if (!state.resumeSelectionMode || state.resumeSelectionMode === 'upload') state.resumeSelectionMode = 'selected';
+    shell(`<main class="page">${pageHeading('Step 1 of 3', 'Build your personalized interview', 'Your saved resume is ready to use.')}<section class="card form-card"><div class="file-card"><span class="file-icon">${icon('file')}</span><div class="file-meta"><strong>Using resume: ${state.resume.name || state.resume.original_filename || 'Resume'}</strong><span>Saved for this account</span></div><button class="btn btn-secondary" type="button" data-resume-change="true">Change</button></div><div style="display:flex;justify-content:flex-end;align-items:center;flex-direction:column;gap:8px;margin-top:24px"><button class="btn btn-primary" data-view="setup" ${canContinueToSetup() ? '' : 'disabled'}>Continue ${icon('arrow')}</button><p id="resume-gate-help" class="muted" style="margin:0;min-height:20px;">${canContinueToSetup() ? '' : 'Upload a resume to continue'}</p></div></section></main>`);
+    return;
+  }
+  state.resume = null;
+  state.resumeSelectionMode = 'upload';
+  shell(`<main class="page">${pageHeading('Step 1 of 3', 'Build your personalized interview', "Upload your resume and we'll tailor the interview to your experience.")}<section class="card form-card"><div class="upload-zone" id="upload-zone"><div class="upload-icon">${icon('upload')}</div><h3>Drag & drop your resume here</h3><p class="subtle" style="margin-bottom:0">or <label for="resume-input">browse files</label></p><input id="resume-input" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><p class="upload-help">PDF or DOCX · Maximum 10MB</p></div><div id="resume-result"></div><div style="display:flex;justify-content:flex-end;align-items:center;flex-direction:column;gap:8px;margin-top:24px"><button class="btn btn-primary" data-view="setup" ${canContinueToSetup() ? '' : 'disabled'}>Continue ${icon('arrow')}</button><p id="resume-gate-help" class="muted" style="margin:0;min-height:20px;">${canContinueToSetup() ? '' : 'Upload a resume to continue'}</p></div></section></main>`);
 }
 function resumeResult() { const file = state.resume || (state.resumes[0] && { name: state.resumes[0].original_filename, size: `${(state.resumes[0].file_size / 1024 / 1024).toFixed(1)} MB`, id: state.resumes[0].id, parsed: state.resumes[0].parsed_profile_json || {}, extracted_text_preview: state.resumes[0].extracted_text_preview || state.resumes[0].extracted_text || '' }); if (!file) return emptyState('No resume uploaded', 'Upload a PDF or DOCX to personalize your interview.'); const parsed = file.parsed || {}; const skills = Array.isArray(parsed.skills) ? parsed.skills : []; const summary = parsed.summary || 'No summary available.'; const experienceYears = parsed.experience_years ?? (parsed.experience ? parsed.experience.length : 0); const preview = file.warning || file.extracted_text_preview || 'No extracted text preview available.'; const errorBanner = file.warning ? `<div class="error-banner" style="margin-top:12px;color:#fca5a5;background:rgba(127,29,29,0.35);border:1px solid rgba(252,165,165,0.4);padding:10px 12px;border-radius:10px;">${file.warning}</div>` : ''; return `<div class="file-card"><span class="file-icon">${icon('file')}</span><div class="file-meta"><strong>${file.name || file.original_filename || 'Resume'}</strong><span>${file.size || 'Uploaded'} · <span style="color:var(--green)">Resume analyzed</span></span></div><button class="icon-btn" id="remove-resume" aria-label="Remove resume">×</button></div>${errorBanner}<div class="extracted"><div class="panel-heading"><div><h3>Resume analysis</h3><span class="muted">We’ll use this context to personalize your questions.</span></div></div><details open><summary style="cursor:pointer;font-weight:600;margin-bottom:10px;">Extracted preview</summary><p class="subtle" style="white-space:pre-wrap;margin-top:12px;max-height:180px;overflow:auto;">${preview}</p></details><div style="margin-top:14px"><strong class="muted" style="font-size:12px;display:block;margin-bottom:8px">Parsed profile</strong><ul class="tag-list" style="margin:0 0 10px;">${skills.length ? skills.slice(0, 8).map(skill => `<li class="tag">${skill}</li>`).join('') : '<li class="tag">No skills detected</li>'}</ul><p class="subtle" style="margin:0 0 8px;"><strong>Experience:</strong> ${experienceYears} years</p><p class="subtle" style="margin:0;"><strong>Summary:</strong> ${summary}</p></div></div>`; }
 function setup() { shell(`<main class="page">${pageHeading('Step 2 of 3', 'What role are you preparing for?', 'Tell us what you are aiming for so every question feels relevant.')}<section class="card form-card"><div class="field"><label for="role">Target job title</label><input id="role" value="${state.role || ''}" placeholder="e.g. Machine Learning Engineer"></div><p id="job-title-help" class="muted" style="min-height:18px;margin:0 0 8px;">${state.role?.trim() ? '' : 'Job title is required'}</p><div class="field"><label for="description">Paste the job description <span class="muted">(optional)</span></label><textarea id="description" placeholder="Paste the job description here (optional)">${state.jobDescription || ''}</textarea></div><div class="field"><label>Interview type</label><div class="option-grid">${['Technical Interview','HR Interview','Behavioral Interview','Mixed Interview'].map(x => `<button class="option ${state.type === x ? 'selected' : ''}" data-option="type" data-value="${x}"><strong>${x}</strong><span>${x === 'Mixed Interview' ? 'A balanced session' : 'Focused practice'}</span></button>`).join('')}</div></div><div class="form-row"><div class="field"><label>Difficulty</label><div class="option-grid three">${['Beginner','Intermediate','Advanced'].map(x => `<button class="option ${state.difficulty === x ? 'selected' : ''}" data-option="difficulty" data-value="${x}"><strong>${x}</strong></button>`).join('')}</div></div><div class="field"><label>Duration</label><div class="option-grid three">${['15 min','30 min','45 min','60 min'].map(x => `<button class="option ${state.duration === x ? 'selected' : ''}" data-option="duration" data-value="${x}"><strong>${x}</strong></button>`).join('')}</div></div></div><div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><button class="btn btn-secondary" data-view="resume">Back</button><button class="btn btn-primary" id="prepare-interview" ${state.role?.trim() ? '' : 'disabled'}>Start interview ${icon('arrow')}</button></div></section></main>`); }
 function lobby() { shell(`<main class="page lobby">${pageHeading('Step 3 of 3', "You're all set.", 'Take a breath. Your session is prepared and ready when you are.')}<section class="lobby-grid"><div class="interviewer-preview"><div class="ai-face">AI</div><div class="preview-copy"><span class="status"><i class="live-dot"></i> Ready</span><strong>Alex — AI Interviewer</strong><span style="color:#afc4e3">Your personal practice partner</span></div></div><article class="card summary-card"><p class="eyebrow">Session summary</p><div class="summary-list"><div class="summary-item"><span>Role</span><strong>${state.role}</strong></div><div class="summary-item"><span>Interview</span><strong>${state.type.replace(' Interview','')} + Behavioral</strong></div><div class="summary-item"><span>Difficulty</span><strong>${state.difficulty}</strong></div><div class="summary-item"><span>Duration</span><strong>${state.duration}</strong></div><div class="summary-item"><span>Questions</span><strong>Personalized by AI</strong></div></div><p class="subtle" style="font-size:12px">Your interviewer will ask questions based on your resume and target role.</p><button class="btn btn-primary" style="width:100%;margin-top:18px" data-view="interview">Enter interview ${icon('arrow')}</button><button class="btn btn-quiet" style="width:100%;margin-top:13px" data-view="setup">Review setup</button></article></section></main>`); }
-function auth() { const registering = state.authMode === 'register'; shell(`<main class="page"><section class="card form-card auth-card"><p class="eyebrow">${registering ? 'Get started' : 'Welcome back'}</p><h1>${registering ? 'Create your InterviewAI account' : 'Sign in to InterviewAI'}</h1><p class="subtle">${registering ? 'Start personalized interview practice with your own account.' : 'Continue your personalized interview practice.'}</p>${registering ? '<div class="field"><label for="auth-name">Full name</label><input id="auth-name" type="text" autocomplete="name" placeholder="Your full name"></div>' : ''}<div class="field"><label for="auth-email">Email</label><input id="auth-email" type="email" autocomplete="email" placeholder="you@example.com"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" type="password" autocomplete="new-password" placeholder="Your password"></div><button class="btn btn-primary" id="auth-submit" style="width:100%">${registering ? 'Create account' : 'Sign in'}</button><button class="btn btn-quiet" id="auth-switch" type="button" style="width:100%;margin-top:10px">${registering ? 'Already have an account? Sign in' : 'New here? Create an account'}</button><p id="auth-error" class="subtle" role="alert" style="margin:14px 0 0"></p></section></main>`, true); }
+function auth() { const registering = state.authMode === 'register'; shell(`<main class="page"><section class="card form-card auth-card"><p class="eyebrow">${registering ? 'Get started' : 'Welcome back'}</p><h1>${registering ? 'Create your InterviewAI account' : 'Sign in to InterviewAI'}</h1><p class="subtle">${registering ? 'Start personalized interview practice with your own account.' : 'Continue your personalized interview practice.'}</p>${registering ? '<div class="field"><label for="auth-name">Full name</label><input id="auth-name" type="text" autocomplete="name" placeholder="Your full name"></div>' : ''}<div class="field"><label for="auth-email">Email</label><input id="auth-email" type="email" autocomplete="email" placeholder="you@example.com"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" type="password" autocomplete="new-password" placeholder="Your password"></div><button class="btn btn-primary" id="auth-submit" style="width:100%">${registering ? 'Sign up' : 'Sign in'}</button><button class="btn btn-quiet" id="auth-switch" type="button" style="width:100%;margin-top:10px">${registering ? 'Sign in' : 'Sign up'}</button><p id="auth-error" class="subtle" role="alert" style="margin:14px 0 0"></p></section></main>`, true); }
 // Email verification UI disabled — re-enable later. Backend support retained.
 function verification() { shell(`<main class="page"><section class="card form-card auth-card"><p class="eyebrow">Almost there</p><h1>Verify your email</h1><p class="subtle">Enter the verification token from your email to activate your account.</p><div class="field"><label for="verification-token">Verification token</label><input id="verification-token" type="text" value="${state.verificationToken}" placeholder="Paste your token"></div><button class="btn btn-primary" id="verify-submit" style="width:100%">Verify email</button><p id="verification-error" class="subtle" role="alert" style="margin:14px 0 0"></p></section></main>`, true); }
 function results() { shell(`<main class="page"><div class="page-heading"><div><p class="eyebrow">Session complete</p><h1>Interview complete</h1><p class="subtle">Review your final performance feedback.</p></div><button class="btn btn-primary" data-view="resume">Practice again ${icon('arrow')}</button></div><section class="results-hero"><div><p class="eyebrow" style="color:#78aaff">${state.role} · ${state.duration}</p><h2 style="color:#fff;margin-bottom:4px">Interview complete</h2><p style="color:#b4c8e3;margin:0">Loading your final feedback...</p></div><div class="results-score"><div class="score-ring"><strong>--</strong></div><div><span style="color:#b4c8e3;font-size:12px">Overall score</span><strong style="display:block">-- / 100</strong></div></div></section><section class="result-grid"><div><article class="card feedback-section positive"><h3>What you did well</h3><ul class="feedback-list"></ul></article><article class="card feedback-section improve"><h3>What to improve</h3><ul class="feedback-list"></ul></article></div><div><article class="card feedback-section recommend"><h3>${icon('spark')} Recommended practice</h3><div class="tag-list"></div></article></div></section></main>`); }
@@ -410,6 +424,7 @@ function realtimeStateLabel() {
 }
 
 function realtimeLiveInterview() {
+  window.onbeforeunload = () => 'Your interview is in progress. If you leave now, your progress will be lost.';
   const status = realtimeStateLabel();
   const transcript = `${state.transcript} ${state.interimTranscript}`.trim();
   const candidateSpeaking = ['LISTENING', 'USER_SPEAKING'].includes(state.interviewState);
@@ -444,7 +459,9 @@ function accountHistory() {
 }
 function accountProfile() {
   const user = state.user || {};
-  shell(`<main class="page">${pageHeading('Account', 'Profile & settings', 'This profile is loaded from the current authenticated session.')}<section class="profile-grid"><article class="card profile-card"><div class="profile-head"><div class="profile-avatar">${userInitials()}</div><div><h3 style="margin-bottom:2px">${user.full_name || 'Account'}</h3><span class="muted">${user.email || ''}</span></div></div><div class="profile-details"><div class="profile-detail"><span>Account status</span><strong>${user.is_active ? 'Active' : 'Inactive'}</strong></div><div class="profile-detail"><span>Resume</span><strong>${state.resumes[0]?.original_filename || 'No resume uploaded'}</strong></div><div class="profile-detail"><span>Interviews</span><strong>${state.interviews.length}</strong></div></div></article><article class="card profile-card"><h3>Your current data</h3><p class="subtle">${state.resumes.length} resume(s), ${state.jobs.length} job context(s), and ${state.interviews.length} interview(s) are associated with this account.</p></article></section><section class="danger-zone"><h3>Danger zone</h3><p class="subtle">This removes your uploaded resumes, saved jobs, interview history, and related usage logs from this account.</p><button class="btn btn-secondary" id="profile-remove-data" type="button">Remove my data</button><button class="btn btn-danger" id="profile-logout" type="button">Log out</button></section></main>`);
+  const currentResume = state.resumes[0] || null;
+  const creditsText = Number.isFinite(state.creditBalance) ? `${state.creditBalance} interviews` : '0 interviews';
+  shell(`<main class="page">${pageHeading('Account', 'Profile & settings', 'This profile is loaded from the current authenticated session.')}<section class="profile-grid"><article class="card profile-card"><div class="profile-head"><div class="profile-avatar">${userInitials()}</div><div><h3 style="margin-bottom:2px">${user.full_name || 'Account'}</h3><span class="muted">${user.email || ''}</span></div></div><div class="profile-details"><div class="profile-detail"><span>Account status</span><strong>${user.is_active ? 'Active' : 'Inactive'}</strong></div><div class="profile-detail"><span>Resume</span><strong>${currentResume ? currentResume.original_filename : 'No resume uploaded'}</strong>${currentResume ? '<button class="btn btn-secondary" type="button" data-resume-remove="' + currentResume.id + '">Remove</button>' : ''}</div><div class="profile-detail"><span>Credits</span><strong>${creditsText}</strong>${!currentResume || state.creditBalance === 0 ? '<button class="btn btn-secondary" type="button" data-buy="panel">Buy</button>' : ''}</div><div class="profile-detail"><span>Interviews</span><strong>${state.interviews.length}</strong></div></div></article><article class="card profile-card"><h3>Your current data</h3><p class="subtle">${state.resumes.length} resume(s), ${state.jobs.length} job context(s), and ${state.interviews.length} interview(s) are associated with this account.</p></article></section><section class="danger-zone"><h3>Danger zone</h3><p class="subtle">This removes your uploaded resumes, saved jobs, interview history, and related usage logs from this account.</p><button class="btn btn-secondary" id="profile-remove-data" type="button">Remove data</button><button class="btn btn-danger" id="profile-logout" type="button">Log out</button></section></main>`);
 }
 async function loadUserData() {
   if (!getAuthToken()) return;
@@ -464,10 +481,10 @@ function showLeaveWarning(onConfirm) {
   const backdrop = document.createElement('div');
   backdrop.id = 'leave-warning-modal';
   backdrop.className = 'modal-backdrop';
-  backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="leave-warning-title"><p class="eyebrow">Leave interview</p><h2 id="leave-warning-title">Leave this interview?</h2><p class="subtle">Your progress is saved, but the current session will be marked incomplete if you leave.</p><div class="modal-actions"><button class="btn btn-secondary" id="stay-in-interview" type="button">Stay</button><button class="btn btn-danger" id="leave-interview" type="button">Leave</button></div></div>`;
+  backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="leave-warning-title"><p class="eyebrow">Leave interview</p><h2 id="leave-warning-title">Leave interview?</h2><p class="subtle">Progress is saved up to the last answered question.</p><div class="modal-actions"><button class="btn btn-secondary" id="stay-in-interview" type="button">Stay</button><button class="btn btn-danger" id="leave-interview" type="button">Leave</button></div></div>`;
   document.body.append(backdrop);
   backdrop.querySelector('#stay-in-interview').addEventListener('click', () => backdrop.remove());
-  backdrop.querySelector('#leave-interview').addEventListener('click', () => { backdrop.remove(); onConfirm?.(); });
+  backdrop.querySelector('#leave-interview').addEventListener('click', async () => { backdrop.remove(); await onConfirm?.(); });
 }
 
 let timerId;
@@ -487,16 +504,40 @@ async function removeUserData() {
 }
 
 function bindEvents() {
-  document.querySelector('#buy-credits')?.addEventListener('click', showCreditsPanel);
+  document.querySelector('#buy-credits')?.addEventListener('click', openBuyPanel);
+  document.querySelectorAll('[data-buy="panel"]').forEach(button => button.addEventListener('click', openBuyPanel));
   document.querySelector('#profile-logout')?.addEventListener('click', logout);
   document.querySelector('#profile-remove-data')?.addEventListener('click', removeUserData);
-  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+  document.querySelector('[data-resume-change="true"]')?.addEventListener('click', () => { state.resumeSelectionMode = 'upload'; render(); });
+  document.querySelectorAll('[data-resume-remove]').forEach(button => button.addEventListener('click', async () => {
+    const id = button.dataset.resumeRemove;
+    if (!id) return;
+    try {
+      await resumeApi.remove(id);
+      state.resumes = state.resumes.filter(item => item.id !== id);
+      if (state.resume?.id === id) state.resume = null;
+      render();
+    } catch (error) {
+      showToast('Could not remove resume', normalizeApiError(error));
+    }
+  }));
+  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', async () => {
     const nextView = button.dataset.view;
-    if (state.view === 'interview' && nextView !== 'interview') {
-      showLeaveWarning(() => { state.view = nextView; render(); });
+    if (state.view === 'interview' && ['dashboard', 'history', 'profile'].includes(nextView)) {
+      showLeaveWarning(async () => {
+        try {
+          if (state.interviewId) await interviewApi.end(state.interviewId);
+        } catch (error) {
+          console.warn('Could not save interview before leaving', error);
+        }
+        window.onbeforeunload = null;
+        state.view = nextView;
+        render();
+      });
       return;
     }
     state.view = nextView;
+    if (state.view !== 'interview') window.onbeforeunload = null;
     render();
   }));
   document.querySelectorAll('[data-option]').forEach(button => button.addEventListener('click', () => { state[button.dataset.option] = button.dataset.value; render(); }));
@@ -529,12 +570,6 @@ async function handleFile(file) { if (!file) return; const valid = ['application
   const finalResult = document.querySelector('#resume-result'); if (finalResult) { finalResult.innerHTML = resumeResult(); bindEvents(); syncResumeGate(); if (!state.resumeError) showToast('Resume analyzed', 'Your interview context is ready.'); }
 }
 function showEndModal() { const backdrop = document.createElement('div'); backdrop.className = 'modal-backdrop'; backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="end-title"><p class="eyebrow">Finish session</p><h2 id="end-title">End this interview?</h2><p class="subtle">Your progress will be saved and you will receive a performance summary.</p><div class="modal-actions"><button class="btn btn-secondary" id="cancel-end">Cancel</button><button class="btn btn-danger" id="confirm-end">End interview</button></div></div>`; document.body.append(backdrop); backdrop.querySelector('#cancel-end').addEventListener('click', () => backdrop.remove()); backdrop.querySelector('#confirm-end').addEventListener('click', async () => { cleanupRealtimeInterview(); if (getAuthToken() && state.interviewId) { try { await interviewApi.end(state.interviewId); state.creditBalance = (await userApi.credits()).balance_minutes; } catch (error) { showToast('Could not save interview', error.message); return; } } backdrop.remove(); state.interviewState = 'INTERVIEW_COMPLETE'; state.view = 'results'; render(); }); }
-window.addEventListener('beforeunload', event => {
-  if (state.view === 'interview' && state.interviewId) {
-    event.preventDefault();
-    event.returnValue = 'You have an interview in progress. Are you sure you want to leave?';
-    return event.returnValue;
-  }
-});
+window.onbeforeunload = null;
 render();
 loadUserData();
