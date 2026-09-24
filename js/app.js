@@ -18,6 +18,74 @@ const icons = {
 };
 const state = { view: window.location.hash === '#login' || !getAuthToken() ? 'auth' : 'dashboard', authMode: 'login', user: null, creditBalance: null, resumes: [], jobs: [], interviews: [], resume: null, resumeError: null, role: '', jobDescription: '', type: 'Mixed Interview', difficulty: 'Intermediate', duration: '30 min', timer: 1722, question: 1, recording: false, cameraStatus: 'CAMERA_OFF', microphoneStatus: 'MIC_OFF', speaker: true, interviewState: 'IDLE', mediaStream: null, microphoneStream: null, speechRecognition: null, textToSpeech: null, transcript: '', interimTranscript: '', answerStartedAt: 0, silenceTimer: null, processingAnswer: false, isSubmitting: false, silencePrompt: false, voiceInitialized: false, sttFallback: false };
 
+function openBuyPanel() {
+  document.getElementById('buy-panel')?.remove();
+  const panel = document.createElement('div');
+  panel.id = 'buy-panel';
+  panel.className = 'buy-panel';
+  panel.innerHTML = `
+    <div class="buy-panel-header">
+      <h3>Choose a plan</h3>
+      <button type="button" class="btn btn-secondary" data-close-buy>Close</button>
+    </div>
+    <div class="buy-panel-body">
+      <button type="button" class="btn btn-primary" data-plan="starter">Starter — 1 interview — Free</button>
+      <button type="button" class="btn btn-primary" data-plan="pro">Pro — 10 interviews — ₹499</button>
+    </div>
+  `;
+  document.body.appendChild(panel);
+
+  panel.querySelector('[data-close-buy]').onclick = () => panel.remove();
+
+  panel.querySelectorAll('[data-plan]').forEach(button => {
+    button.onclick = async () => {
+      const plan = button.getAttribute('data-plan');
+      try {
+        const response = await paymentApi.createOrder(plan);
+        if (response.free) {
+          await refreshCredits();
+          panel.remove();
+          showToast('1 interview added');
+          return;
+        }
+
+        if (typeof window.Razorpay !== 'function') {
+          throw new Error('Payment checkout is unavailable. Please refresh and try again.');
+        }
+
+        const rzp = new window.Razorpay({
+          key: response.key_id,
+          amount: response.amount_paise,
+          currency: 'INR',
+          order_id: response.order_id,
+          name: 'InterviewAI',
+          description: plan === 'pro' ? 'Pro — 10 interviews' : 'Starter — 1 interview',
+          theme: { color: '#4F46E5' },
+          handler: async (result) => {
+            try {
+              await paymentApi.verify({
+                razorpay_order_id: result.razorpay_order_id,
+                razorpay_payment_id: result.razorpay_payment_id,
+                razorpay_signature: result.razorpay_signature,
+              });
+              await refreshCredits();
+              panel.remove();
+              showToast('Payment successful');
+            } catch (error) {
+              console.error(error);
+              showToast('Payment verification failed', normalizeApiError(error));
+            }
+          },
+        });
+        rzp.open();
+      } catch (error) {
+        console.error(error);
+        showToast('Could not create payment order', normalizeApiError(error));
+      }
+    };
+  });
+}
+
 function showToast(title, detail = '') { const toast = document.createElement('div'); toast.className = 'toast'; toast.innerHTML = `<strong>${title}</strong><span>${detail}</span>`; toastRegion.append(toast); setTimeout(() => toast.remove(), 3400); }
 function icon(name) { return icons[name] || ''; }
 function formatTime(seconds) { return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; }
@@ -31,7 +99,23 @@ function header() { return `<header class="topbar"><button class="brand" data-vi
 function resetUserState() { cleanupRealtimeInterview(); Object.assign(state, { view: 'auth', user: null, resumes: [], jobs: [], interviews: [], resume: null, resumeError: null, role: '', jobDescription: '', interviewId: null, currentQuestionId: null, remoteQuestion: null, transcript: '', interimTranscript: '', feedback: null, interviewState: 'IDLE' }); }
 async function logout() { await authApi.logout(); resetUserState(); window.history.replaceState({}, '', '#login'); render(); }
 function setupProfileMenu() { const trigger = document.querySelector('.profile-chip'); if (!trigger) return; trigger.removeAttribute('data-view'); trigger.setAttribute('aria-expanded', 'false'); const menu = document.createElement('div'); menu.className = 'profile-menu'; menu.innerHTML = '<button class="profile-menu-item" data-view="profile">Profile / Settings</button>'; trigger.parentElement.append(menu); trigger.addEventListener('click', event => { event.stopPropagation(); const open = menu.classList.toggle('open'); trigger.setAttribute('aria-expanded', String(open)); }); if (!document.body.dataset.profileMenuBound) { document.addEventListener('click', event => { const openMenu = document.querySelector('.profile-menu.open'); if (openMenu && !event.target.closest('.profile-menu') && !event.target.closest('.profile-chip')) { openMenu.classList.remove('open'); document.querySelector('.profile-chip')?.setAttribute('aria-expanded', 'false'); } }); document.body.dataset.profileMenuBound = 'true'; } }
-async function refreshCredits() { const credits = await userApi.credits(); state.creditBalance = Number(credits.balance_interviews ?? credits.balance_minutes ?? 0); render(); }
+async function refreshCredits() {
+  try {
+    const profileResult = await userApi.profile().catch(() => null);
+    const credits = profileResult?.credits ?? (await userApi.credits().catch(() => ({ balance_interviews: 0 })));
+    const balance = Number(credits.balance_interviews ?? credits.balance_minutes ?? 0);
+    state.creditBalance = balance;
+
+    document.querySelectorAll('.credits-display').forEach(element => {
+      element.textContent = `Credits: ${balance} interview${balance === 1 ? '' : 's'}`;
+    });
+    document.querySelectorAll('[data-buy]').forEach(element => {
+      element.style.display = balance === 0 ? '' : 'none';
+    });
+  } catch (error) {
+    console.error('refreshCredits failed', error);
+  }
+}
 async function purchasePlan(plan) {
   try {
     const response = await paymentApi.createOrder(plan);
@@ -70,7 +154,6 @@ async function purchasePlan(plan) {
     showToast('Could not create payment order', normalizeApiError(error));
   }
 }
-function showCreditsPanel() { if (document.querySelector('#credits-panel')) return; const panel = document.createElement('div'); panel.id = 'credits-panel'; panel.className = 'credits-panel'; panel.innerHTML = '<strong>Choose a plan</strong><button class="btn btn-secondary credit-plan" data-plan="starter" type="button">Starter · 1 interview · Free</button><button class="btn btn-primary credit-plan" data-plan="pro" type="button">Pro · 10 interviews · ₹499</button>'; document.body.append(panel); panel.querySelectorAll('.credit-plan').forEach(button => button.addEventListener('click', () => purchasePlan(button.dataset.plan))); }
 function shell(content, noHeader = false) { app.innerHTML = `<div class="app-shell">${noHeader ? '' : header()}${content}</div>`; setupProfileMenu(); bindEvents(); }
 function pageHeading(eyebrow, title, subtitle, action = '') { return `<div class="page-heading"><div><p class="eyebrow">${eyebrow}</p><h1>${title}</h1><p class="subtle">${subtitle}</p></div>${action}</div>`; }
 function dashboard() { shell(`<main class="page">${pageHeading('Wednesday, September 23', 'Good afternoon, Alex', 'Ready for your next interview?', '<button class="btn btn-primary" data-view="resume">Start new interview ' + icon('arrow') + '</button>')}<section class="stat-grid"><article class="card stat-card"><div class="stat-top"><span>Interviews completed</span><span class="stat-icon">↗</span></div><strong class="stat-value">12</strong><span class="muted">+3 this month</span></article><article class="card stat-card"><div class="stat-top"><span>Practice time</span><span class="stat-icon">◷</span></div><strong class="stat-value">8.5h</strong><span class="muted">+1.2h this month</span></article><article class="card stat-card"><div class="stat-top"><span>Average score</span><span class="stat-icon">✦</span></div><strong class="stat-value">82%</strong><span class="muted">Top 18% of users</span></article><article class="card stat-card"><div class="stat-top"><span>Current streak</span><span class="stat-icon">♢</span></div><strong class="stat-value">6 days</strong><span class="muted">Personal best: 14</span></article></section><section class="dashboard-grid"><article class="card panel"><div class="panel-heading"><h3>Recent practice</h3><button class="btn btn-quiet" data-view="history">View all ${icon('arrow')}</button></div><div class="activity-list"><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Machine Learning Engineer</strong><span>Technical + Behavioral · 2 hours ago</span></div><span class="score-pill">82%</span></div><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Python Developer</strong><span>Technical · Monday</span></div><span class="score-pill">88%</span></div><div class="activity"><span class="activity-badge">✦</span><div class="activity-copy"><strong>Data Scientist</strong><span>Mixed interview · Sep 18</span></div><span class="score-pill">79%</span></div></div></article><article class="card panel streak-panel"><p class="eyebrow" style="color:#78aaff">Your momentum</p><h3>Keep your streak alive</h3><p class="subtle">One focused session today keeps your progress moving.</p><div class="streak-number">6</div><span class="subtle">days in a row</span><div style="margin-top:25px"><div class="progress" style="background:#244268"><span style="width:60%;background:#68a7ff"></span></div><p class="subtle" style="font-size:12px;margin:8px 0 0">4 more days to beat your record</p></div></article></section></main>`); }
@@ -571,5 +654,10 @@ async function handleFile(file) { if (!file) return; const valid = ['application
 }
 function showEndModal() { const backdrop = document.createElement('div'); backdrop.className = 'modal-backdrop'; backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="end-title"><p class="eyebrow">Finish session</p><h2 id="end-title">End this interview?</h2><p class="subtle">Your progress will be saved and you will receive a performance summary.</p><div class="modal-actions"><button class="btn btn-secondary" id="cancel-end">Cancel</button><button class="btn btn-danger" id="confirm-end">End interview</button></div></div>`; document.body.append(backdrop); backdrop.querySelector('#cancel-end').addEventListener('click', () => backdrop.remove()); backdrop.querySelector('#confirm-end').addEventListener('click', async () => { cleanupRealtimeInterview(); if (getAuthToken() && state.interviewId) { try { await interviewApi.end(state.interviewId); state.creditBalance = (await userApi.credits()).balance_minutes; } catch (error) { showToast('Could not save interview', error.message); return; } } backdrop.remove(); state.interviewState = 'INTERVIEW_COMPLETE'; state.view = 'results'; render(); }); }
 window.onbeforeunload = null;
-render();
-loadUserData();
+try {
+  render();
+  loadUserData();
+} catch (error) {
+  console.error('Render failed:', error);
+  document.body.innerHTML = `<pre style="padding:20px">Render error: ${error.message}</pre>`;
+}
