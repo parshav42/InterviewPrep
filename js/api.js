@@ -60,7 +60,8 @@ export const authApi = {
 
 export const userApi = {
   profile: () => api('/api/user/profile'),
-  credits: () => api('/api/user/credits')
+  credits: () => api('/api/user/credits'),
+  removeData: () => api('/api/user/data', { method: 'DELETE' })
 };
 
 export const paymentApi = {

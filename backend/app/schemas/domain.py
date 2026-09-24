@@ -58,6 +58,20 @@ class InterviewResponse(BaseModel):
     created_at: datetime
 
 
+class InterviewHistoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    user_id: UUID
+    interview_type: str
+    difficulty: str
+    duration_target_minutes: int
+    started_at: datetime | None
+    ended_at: datetime | None
+    duration_seconds: int | None
+    score: float | None
+    created_at: datetime
+
+
 class AnswerCreate(BaseModel):
     question_id: UUID
     answer_text: str = Field(min_length=1, max_length=30000)
