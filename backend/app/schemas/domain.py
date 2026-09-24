@@ -84,3 +84,9 @@ class QuestionResponse(BaseModel):
     question_text: str
     category: str
     difficulty: str
+
+
+class AnswerResponse(FeedbackResponse):
+    next_question: QuestionResponse | None = None
+    is_complete: bool = False
+    feedback_url: str | None = None

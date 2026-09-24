@@ -3,7 +3,7 @@ import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,7 @@ from app.api.dependencies import current_user
 from app.db.database import get_db
 from app.db.models.domain import Answer, Feedback, Interview, InterviewQuestion, InterviewStatus, Job, Resume
 from app.db.models.user import User
-from app.schemas.domain import AnswerCreate, FeedbackResponse, InterviewCreate, InterviewResponse, QuestionResponse
+from app.schemas.domain import AnswerCreate, AnswerResponse, FeedbackResponse, InterviewCreate, InterviewResponse, QuestionResponse
 from app.schemas.ai import FinalFeedback
 from app.services.llm.factory import get_structured_llm_service
 from app.services.llm.qwen_provider import LLMProviderError
@@ -33,6 +33,29 @@ def owned_interview(interview_id: UUID, user_id: UUID, db: Session) -> Interview
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found")
     return interview
+
+
+def interviewer_context(interview: Interview, user: User, db: Session, instruction: str) -> str:
+    resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
+    job = db.get(Job, interview.job_id) if interview.job_id else None
+    history = []
+    questions = db.scalars(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id).order_by(InterviewQuestion.question_number)).all()
+    for item in questions:
+        answer = db.scalar(select(Answer).where(Answer.question_id == item.id))
+        history.append(f"Q{item.question_number}: {item.question_text}\nA{item.question_number}: {answer.answer_text if answer else '[not answered]'}")
+    return (
+        f"Candidate name: {user.full_name}\n"
+        f"Role: {job.title if job else 'Target role'}\n"
+        f"Resume summary: {(resume.parsed_profile_json if resume else {})}\n"
+        f"Job description: {(job.job_description if job else '')[:12000]}\n"
+        f"Job analysis: {(job.parsed_analysis_json if job else {})}\n"
+        f"Interview type: {interview.interview_type}\n"
+        f"Difficulty: {interview.difficulty}\n"
+        f"Previous questions and answers:\n{'\n'.join(history) or '[none]'}\n"
+        f"Current question number: {len(questions) + 1}\n"
+        f"Maximum questions: {get_settings().max_interview_questions}\n"
+        f"Instruction: Generate the next thing the interviewer should say. {instruction}"
+    )
 
 
 @router.post("", response_model=InterviewResponse, status_code=201)
@@ -67,11 +90,8 @@ async def start_interview(interview_id: UUID, user: Annotated[User, Depends(curr
     debit_minutes(db, user.id, interview.duration_target_minutes, str(interview.id))
     interview.started_at = interview.started_at or datetime.now(timezone.utc)
     if not db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id)):
-        resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
-        job = db.get(Job, interview.job_id) if interview.job_id else None
-        context = f"Role: {job.title if job else 'Target role'}\nInterview type: {interview.interview_type}\nDifficulty: {interview.difficulty}\nCandidate profile: {(resume.parsed_profile_json if resume else {})}\nJob analysis: {(job.parsed_analysis_json if job else {})}"
         try:
-            generated, result = await get_structured_llm_service().generate_question(context)
+            generated, result = await get_structured_llm_service().generate_question(interviewer_context(interview, user, db, "This is the opening. Greet the candidate and make them comfortable, then ask the first question."))
         except (ValueError, LLMProviderError) as exc:
             raise HTTPException(status_code=502, detail="Question generation is temporarily unavailable") from exc
         question = InterviewQuestion(interview_id=interview.id, question_number=1, question_text=generated.question, category=generated.category, difficulty=generated.difficulty)
@@ -83,8 +103,8 @@ async def start_interview(interview_id: UUID, user: Annotated[User, Depends(curr
     return interview
 
 
-@router.post("/{interview_id}/answer", response_model=FeedbackResponse, dependencies=[Depends(check_llm_rate_limit)])
-async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> Feedback:
+@router.post("/{interview_id}/answer", response_model=AnswerResponse, dependencies=[Depends(check_llm_rate_limit)])
+async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> AnswerResponse:
     interview = owned_interview(interview_id, user.id, db)
     question = db.scalar(select(InterviewQuestion).where(InterviewQuestion.id == payload.question_id, InterviewQuestion.interview_id == interview.id))
     if interview.status != InterviewStatus.IN_PROGRESS or not question:
@@ -103,7 +123,7 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
         return existing_feedback
     resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
     job = db.get(Job, interview.job_id) if interview.job_id else None
-    interview_context = f"Role: {job.title if job else 'Target role'}\nInterview type: {interview.interview_type}\nDifficulty: {interview.difficulty}\nCandidate profile: {(resume.parsed_profile_json if resume else {})}\nJob analysis: {(job.parsed_analysis_json if job else {})}"
+    interview_context = interviewer_context(interview, user, db, "Evaluate the candidate's answer.")
     try:
         evaluation, result = await get_structured_llm_service().evaluate_answer(question.question_text, answer_text, interview_context)
     except (ValueError, LLMProviderError) as exc:
@@ -118,7 +138,7 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     final_result = None
     if next_number <= get_settings().max_interview_questions:
         try:
-            followup, followup_result = await get_structured_llm_service().generate_question(f"Previous question: {question.question_text}\nPrevious answer: {answer_text}\nEvaluation: {evaluation.model_dump()}\nGenerate an adaptive follow-up question.")
+            followup, followup_result = await get_structured_llm_service().generate_question(interviewer_context(interview, user, db, "Acknowledge the previous answer briefly, then ask the next question."))
             followup_text = followup.question
             followup_category = followup.category
             followup_difficulty = followup.difficulty
@@ -128,7 +148,8 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
             followup_difficulty = interview.difficulty
         db.add(InterviewQuestion(interview_id=interview.id, question_number=next_number, question_text=followup_text, category=followup_category, difficulty=followup_difficulty))
     else:
-        evaluation_payload = json.dumps([{"question": question.question_text, "answer": answer_text, "feedback": evaluation.feedback, "scores": {"technical": evaluation.technical_accuracy, "communication": evaluation.communication, "relevance": evaluation.relevance, "clarity": evaluation.depth, "confidence": evaluation.problem_solving}}])
+        evaluations = db.execute(select(Feedback, Answer, InterviewQuestion).join(Answer, Feedback.answer_id == Answer.id).join(InterviewQuestion, Answer.question_id == InterviewQuestion.id).where(InterviewQuestion.interview_id == interview.id)).all()
+        evaluation_payload = json.dumps([{"question": item.question_text, "answer": item_answer.answer_text, "feedback": item_feedback.ai_feedback, "scores": {"technical": item_feedback.technical_score, "communication": item_feedback.communication_score, "relevance": item_feedback.relevance_score, "clarity": item_feedback.clarity_score, "confidence": item_feedback.confidence_score}} for item_feedback, item_answer, item in evaluations])
         try:
             final_feedback, final_result = await get_structured_llm_service().generate_final_feedback(interview_context, evaluation_payload)
         except (ValueError, LLMProviderError):
@@ -149,14 +170,21 @@ async def submit_answer(interview_id: UUID, payload: AnswerCreate, user: Annotat
     if final_result:
         record_ai_usage(db, user_id=user.id, interview_id=interview.id, request_type="final_feedback", result=final_result)
     db.refresh(feedback)
-    return feedback
+    next_question = None if interview.status == InterviewStatus.COMPLETED else db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview.id, ~select(Answer.id).where(Answer.question_id == InterviewQuestion.id).exists()).order_by(InterviewQuestion.question_number.desc()))
+    response = AnswerResponse.model_validate(feedback)
+    response.next_question = next_question
+    response.is_complete = interview.status == InterviewStatus.COMPLETED
+    response.feedback_url = f"/api/interviews/{interview.id}/feedback" if response.is_complete else None
+    return response
 
 
-@router.get("/{interview_id}/questions/current", response_model=QuestionResponse)
-def current_question(interview_id: UUID, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> InterviewQuestion:
-    owned_interview(interview_id, user.id, db)
-    question = db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview_id).order_by(InterviewQuestion.question_number.desc()))
+@router.get("/{interview_id}/questions/current", response_model=QuestionResponse, status_code=status.HTTP_200_OK)
+def current_question(interview_id: UUID, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)]) -> InterviewQuestion | Response:
+    interview = owned_interview(interview_id, user.id, db)
+    question = db.scalar(select(InterviewQuestion).where(InterviewQuestion.interview_id == interview_id, ~select(Answer.id).where(Answer.question_id == InterviewQuestion.id).exists()).order_by(InterviewQuestion.question_number.desc()))
     if not question:
+        if interview.status == InterviewStatus.COMPLETED:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
         raise HTTPException(status_code=404, detail="No interview question is available")
     return question
 

@@ -56,8 +56,38 @@ def test_question_cap_completes_interview_and_persists_final_feedback(client, mo
     completed = client.get(f"/api/interviews/{interview_id}", headers=owner).json()
     assert completed["status"] == "COMPLETED"
     assert completed["final_feedback_json"]["summary"]
-    assert client.get(f"/api/interviews/{interview_id}/questions/current", headers=owner).json()["question_number"] == 3
+    assert client.get(f"/api/interviews/{interview_id}/questions/current", headers=owner).status_code == 204
     assert len(client.get(f"/api/interviews/{interview_id}/feedback", headers=owner).json()) == 3
+
+
+def test_interview_asks_multiple_questions(client, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "max_interview_questions", 3)
+    owner = auth_headers(client, "multiple-questions@example.com")
+    interview = client.post(f"/api/interviews", headers=owner, json={"interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    interview_id = interview["id"]
+    assert client.post(f"/api/interviews/{interview_id}/start", headers=owner).status_code == 200
+
+    question_numbers = []
+    for answer_number in range(3):
+        question = client.get(f"/api/interviews/{interview_id}/questions/current", headers=owner).json()
+        question_numbers.append(question["question_number"])
+        if answer_number == 0:
+            assert question["question_text"].startswith("Hi Candidate, welcome")
+        if answer_number == 1:
+            assert question["question_text"].startswith("Thanks for sharing that")
+        response = client.post(f"/api/interviews/{interview_id}/answer", headers=owner, json={"question_id": question["id"], "answer_text": f"A detailed answer with evidence {answer_number + 1}"})
+        assert response.status_code == 200
+        payload = response.json()
+        if answer_number < 2:
+            assert payload["next_question"]["question_number"] == answer_number + 2
+            assert payload["is_complete"] is False
+        else:
+            assert payload["next_question"] is None
+            assert payload["is_complete"] is True
+
+    assert question_numbers == [1, 2, 3]
 
 
 def test_llm_followup_failure_uses_deterministic_question_fallback(client, monkeypatch):

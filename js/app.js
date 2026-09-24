@@ -252,16 +252,16 @@ async function submitVoiceAnswer() {
   setRealtimeState('PROCESSING_ANSWER', 'Analyzing your answer...');
   try {
     state.feedback = await interviewApi.answer(state.interviewId, { question_id: state.currentQuestionId, answer_text: answerText, response_duration_seconds: Math.round((Date.now() - state.answerStartedAt) / 1000) });
-    const next = await interviewApi.currentQuestion(state.interviewId);
-    if (next.question_number <= state.question) {
-      await interviewApi.end(state.interviewId);
+    if (state.feedback.is_complete) {
       state.processingAnswer = false;
+      state.isSubmitting = false;
       state.interviewState = 'INTERVIEW_COMPLETE';
       state.view = 'results';
       cleanupRealtimeInterview();
       render();
       return;
     }
+    const next = state.feedback.next_question || await interviewApi.currentQuestion(state.interviewId);
     state.currentQuestionId = next.id;
     state.remoteQuestion = next.question_text;
     state.question = next.question_number;
@@ -388,7 +388,7 @@ function realtimeLiveInterview() {
   const showManualAnswer = state.sttFallback || !state.speechRecognition?.available || state.microphoneStatus === 'MIC_ERROR';
   if (!state.timerStarted) { state.timer = Number.parseInt(state.duration, 10) * 60; state.timerStarted = true; }
   shell(`<main class="live-interview" aria-label="Live AI interview">
-    <header class="live-topbar"><div><span class="live-kicker">InterviewAI</span><strong>Live interview</strong></div><div class="live-session">${creditsMarkup()} <span class="live-divider"></span>Interview ${state.question} / 10 <span class="live-divider"></span><span id="timer">${formatTime(state.timer)}</span></div></header>
+    <header class="live-topbar"><div><span class="live-kicker">InterviewAI</span><strong>Live interview</strong></div><div class="live-session">${creditsMarkup()} <span class="live-divider"></span>Question ${state.question} of 10 <span class="live-divider"></span><span id="timer">${formatTime(state.timer)}</span></div></header>
     <div class="live-status" aria-live="polite"><strong id="stage-status">${status}</strong></div>
     <section class="live-stage"><div class="candidate-tile participant user-participant"><video id="user-video" autoplay playsinline muted></video><span class="participant-label">You</span><span class="participant-state" id="camera-status">Camera off</span></div><div class="ai-tile participant ai-participant" id="ai-presence"><div class="video-avatar">AI</div><strong>AI Interviewer</strong><span class="participant-state" id="voice-status">${status}</span></div><div class="stage-timer"><span>Time remaining</span><strong>${formatTime(state.timer)}</strong></div></section>
     <section class="live-workspace"><article class="interviewer-card"><div class="card-eyebrow"><span>AI INTERVIEWER</span><span class="question-count">Question ${state.question} of 10</span></div><h1>${state.remoteQuestion || 'Waiting for interviewer...'}</h1><span class="question-topic">${state.type.replace(' Interview', '')}</span></article><article class="transcript-card"><div class="transcript-heading"><strong>${candidateSpeaking ? 'Listening...' : 'Your response'}</strong></div><p id="live-transcript-text">${state.silencePrompt ? 'Did you say something?' : (transcript || 'Listening...')}</p>${state.silencePrompt ? '<button class="btn btn-secondary" id="repeat-question" type="button">Repeat question</button>' : ''}${showManualAnswer ? '<div class="manual-answer"><textarea id="manual-answer-input" rows="3" placeholder="Type your answer here..." aria-label="Type your answer"></textarea><button class="btn btn-primary" id="manual-answer-submit" type="button">Submit answer</button></div>' : ''}</article></section>

@@ -35,15 +35,19 @@ async def security_headers(request: Request, call_next) -> Response:
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Content-Security-Policy"] = (
-    "default-src 'self'; "
-    "connect-src 'self' http://127.0.0.1:8002 http://localhost:8002 https://api.razorpay.com https://lumberjack.razorpay.com; "
-    "media-src 'self' blob:; "
-    "img-src 'self' data: blob: https://*.razorpay.com; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com; "
-    "frame-src https://api.razorpay.com https://checkout.razorpay.com; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com data:; "
-)
+        "default-src 'self'; "
+        "connect-src 'self' http://127.0.0.1:8002 http://localhost:8002 "
+            "https://api.razorpay.com https://lumberjack.razorpay.com "
+            "https://checkout.razorpay.com https://cdn.razorpay.com; "
+        "media-src 'self' blob:; "
+        "img-src 'self' data: blob: https://*.razorpay.com; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+            "https://checkout.razorpay.com https://cdn.razorpay.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "frame-src 'self' https://api.razorpay.com https://checkout.razorpay.com; "
+        "form-action 'self'; "
+    )
     if settings.app_env == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
