@@ -17,9 +17,10 @@ def auth_headers(client, email):
 def test_interview_ownership_and_flow(client):
     owner = auth_headers(client, "owner@example.com")
     other = auth_headers(client, "other@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
     job = client.post("/api/jobs", headers=owner, json={"title": "ML Engineer", "job_description": "Build models"}).json()
     assert client.get(f"/api/jobs/{job['id']}", headers=other).status_code == 404
-    interview = client.post("/api/interviews", headers=owner, json={"job_id": job["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"job_id": job["id"], "resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
     assert client.get(f"/api/interviews/{interview['id']}", headers=other).status_code == 404
     started = client.post(f"/api/interviews/{interview['id']}/start", headers=owner)
     assert started.status_code == 200
@@ -44,7 +45,8 @@ def test_question_cap_completes_interview_and_persists_final_feedback(client, mo
     settings = get_settings()
     monkeypatch.setattr(settings, "max_interview_questions", 3)
     owner = auth_headers(client, "cap@example.com")
-    interview = client.post("/api/interviews", headers=owner, json={"interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
     interview_id = interview["id"]
     assert client.post(f"/api/interviews/{interview_id}/start", headers=owner).status_code == 200
 
@@ -65,7 +67,8 @@ def test_interview_asks_multiple_questions(client, monkeypatch):
 
     monkeypatch.setattr(get_settings(), "max_interview_questions", 3)
     owner = auth_headers(client, "multiple-questions@example.com")
-    interview = client.post(f"/api/interviews", headers=owner, json={"interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post(f"/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
     interview_id = interview["id"]
     assert client.post(f"/api/interviews/{interview_id}/start", headers=owner).status_code == 200
 
@@ -107,7 +110,8 @@ def test_llm_followup_failure_uses_deterministic_question_fallback(client, monke
 
     monkeypatch.setattr(service.provider, "generate", fail_followup)
     owner = auth_headers(client, "fallback@example.com")
-    interview = client.post("/api/interviews", headers=owner, json={"interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
     interview_id = interview["id"]
     assert client.post(f"/api/interviews/{interview_id}/start", headers=owner).status_code == 200
     question = client.get(f"/api/interviews/{interview_id}/questions/current", headers=owner).json()
