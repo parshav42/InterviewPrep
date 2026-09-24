@@ -34,3 +34,33 @@ def test_resume_rejects_invalid_and_oversized_files(client):
     assert invalid.status_code == 422
     oversized = client.post("/api/resumes/upload", headers=headers, files={"file": ("resume.pdf", b"x" * (10 * 1024 * 1024 + 1), "application/pdf")})
     assert oversized.status_code == 413
+
+
+def test_upload_returns_extracted_text(client):
+    headers = auth_headers(client, "resume-preview@example.com")
+    response = client.post("/api/resumes/upload", headers=headers, files={"file": ("resume.pdf", pdf_bytes(), "application/pdf")})
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["extracted_text_preview"]
+    assert "Candidate Python FastAPI experience" in payload["extracted_text_preview"]
+    assert payload["parsed"]["skills"]
+    assert payload["parsed"]["summary"]
+
+
+def test_upload_invalid_returns_error(client):
+    headers = auth_headers(client, "resume-invalid@example.com")
+    response = client.post("/api/resumes/upload", headers=headers, files={"file": ("resume.txt", b"hello world", "text/plain")})
+    assert response.status_code == 415
+    assert "Only PDF and DOCX resumes" in response.json()["detail"]
+
+
+def test_upload_scanned_pdf_returns_warning(client):
+    headers = auth_headers(client, "resume-scanned@example.com")
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((72, 72), " ")
+    payload = document.tobytes()
+    document.close()
+    response = client.post("/api/resumes/upload", headers=headers, files={"file": ("scan.pdf", payload, "application/pdf")})
+    assert response.status_code == 422
+    assert "Could not extract text from this PDF" in response.json()["detail"]
