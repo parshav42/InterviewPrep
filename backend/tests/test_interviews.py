@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.db.database import SessionLocal
-from app.db.models.domain import AIUsage, Credit, CreditTransaction
+from app.db.models.domain import AIUsage, Credit, CreditTransaction, Interview, InterviewStatus
 
 
 def auth_headers(client, email):
@@ -32,6 +32,66 @@ def test_interview_ownership_and_flow(client):
     assert feedback.status_code == 200
     assert feedback.json()["overall_score"] if "overall_score" in feedback.json() else feedback.json()["technical_score"]
     assert client.get(f"/api/interviews/{interview['id']}", headers=owner).status_code == 200
+
+
+def test_end_interview_succeeds_first_time(client):
+    owner = auth_headers(client, "end-success@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    assert client.post(f"/api/interviews/{interview['id']}/start", headers=owner).status_code == 200
+
+    response = client.post(f"/api/interviews/{interview['id']}/end", headers=owner)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "COMPLETED"
+    assert payload["ended_at"]
+    assert payload["actual_duration_seconds"] is not None
+
+
+def test_end_interview_twice_returns_200(client):
+    owner = auth_headers(client, "end-twice@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    assert client.post(f"/api/interviews/{interview['id']}/start", headers=owner).status_code == 200
+
+    first = client.post(f"/api/interviews/{interview['id']}/end", headers=owner)
+    assert first.status_code == 200
+    second = client.post(f"/api/interviews/{interview['id']}/end", headers=owner)
+    assert second.status_code == 200
+    assert second.json()["status"] == "COMPLETED"
+
+
+def test_end_interview_unknown_id_returns_404(client):
+    owner = auth_headers(client, "end-missing@example.com")
+    unknown_id = UUID("11111111-1111-4111-8111-111111111111")
+    response = client.post(f"/api/interviews/{unknown_id}/end", headers=owner)
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_end_interview_null_started_at_no_crash(client):
+    owner = auth_headers(client, "end-null-started@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    with SessionLocal() as db:
+        row = db.get(Interview, UUID(interview["id"]))
+        row.status = InterviewStatus.IN_PROGRESS
+        row.started_at = None
+        db.commit()
+
+    response = client.post(f"/api/interviews/{interview['id']}/end", headers=owner)
+    assert response.status_code == 200
+    assert response.json()["actual_duration_seconds"] is None
+
+
+def test_end_interview_other_user_returns_404(client):
+    owner = auth_headers(client, "end-owner@example.com")
+    other = auth_headers(client, "end-other@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+
+    response = client.post(f"/api/interviews/{interview['id']}/end", headers=other)
+    assert response.status_code == 404
 
 
 def test_admin_routes_require_role(client):

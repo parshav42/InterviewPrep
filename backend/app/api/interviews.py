@@ -237,39 +237,64 @@ def current_question(interview_id: UUID, user: Annotated[User, Depends(current_u
     return question
 
 
+def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _safe_duration_seconds(started_at: datetime | None, ended_at: datetime | None) -> int | None:
+    start = _normalize_utc_datetime(started_at)
+    end = _normalize_utc_datetime(ended_at)
+    if start is None or end is None:
+        return None
+    return max(0, int((end - start).total_seconds()))
+
+
 @router.post("/{interview_id}/end", response_model=InterviewResponse)
 async def end_interview(interview_id: UUID, user: Annotated[User, Depends(current_user)], db: Annotated[Session, Depends(get_db)], abandon: bool = False) -> Interview:
-    interview = owned_interview(interview_id, user.id, db)
-    if interview.status not in (InterviewStatus.IN_PROGRESS, InterviewStatus.CREATED):
-        raise HTTPException(status_code=409, detail="Interview is already finished")
-    if abandon:
-        interview.status = InterviewStatus.IN_PROGRESS
-        interview.ended_at = None
+    try:
+        interview = owned_interview(interview_id, user.id, db)
+        status_value = interview.status.value if hasattr(interview.status, "value") else str(interview.status)
+        if status_value in {"COMPLETED", "ABANDONED", "CANCELLED"}:
+            if interview.ended_at is not None and interview.started_at is not None:
+                interview.actual_duration_seconds = _safe_duration_seconds(interview.started_at, interview.ended_at)
+            elif interview.actual_duration_seconds is None:
+                interview.actual_duration_seconds = None
+            db.refresh(interview)
+            return interview
+        if interview.status not in (InterviewStatus.IN_PROGRESS, InterviewStatus.CREATED):
+            raise HTTPException(status_code=409, detail="Interview is already finished")
+        if abandon:
+            interview.status = InterviewStatus.IN_PROGRESS
+            interview.ended_at = None
+            db.commit()
+            db.refresh(interview)
+            return interview
+        evaluations = db.execute(select(Feedback, Answer, InterviewQuestion).join(Answer, Feedback.answer_id == Answer.id).join(InterviewQuestion, Answer.question_id == InterviewQuestion.id).where(InterviewQuestion.interview_id == interview.id)).all()
+        resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
+        job = db.get(Job, interview.job_id) if interview.job_id else None
+        interview_context = f"Role: {job.title if job else 'Target role'}\nInterview type: {interview.interview_type}\nDifficulty: {interview.difficulty}\nCandidate profile: {(resume.parsed_profile_json if resume else {})}\nJob analysis: {(job.parsed_analysis_json if job else {})}"
+        evaluation_payload = json.dumps([{"question": question.question_text, "answer": answer.answer_text, "feedback": feedback.ai_feedback, "scores": {"technical": feedback.technical_score, "communication": feedback.communication_score, "relevance": feedback.relevance_score, "clarity": feedback.clarity_score, "confidence": feedback.confidence_score}} for feedback, answer, question in evaluations])
+        try:
+            final_feedback, final_result = await get_structured_llm_service().generate_final_feedback(interview_context, evaluation_payload)
+        except (ValueError, LLMProviderError) as exc:
+            raise HTTPException(status_code=502, detail="Final interview feedback is temporarily unavailable") from exc
+        interview.ended_at = datetime.now(timezone.utc)
+        interview.status = InterviewStatus.COMPLETED
+        interview.final_feedback_json = final_feedback.model_dump()
+        interview.actual_duration_seconds = _safe_duration_seconds(interview.started_at, interview.ended_at)
+        interview.overall_score = final_feedback.overall_score
         db.commit()
+        record_ai_usage(db, user_id=user.id, interview_id=interview.id, request_type="final_feedback", result=final_result)
         db.refresh(interview)
         return interview
-    evaluations = db.execute(select(Feedback, Answer, InterviewQuestion).join(Answer, Feedback.answer_id == Answer.id).join(InterviewQuestion, Answer.question_id == InterviewQuestion.id).where(InterviewQuestion.interview_id == interview.id)).all()
-    resume = db.get(Resume, interview.resume_id) if interview.resume_id else None
-    job = db.get(Job, interview.job_id) if interview.job_id else None
-    interview_context = f"Role: {job.title if job else 'Target role'}\nInterview type: {interview.interview_type}\nDifficulty: {interview.difficulty}\nCandidate profile: {(resume.parsed_profile_json if resume else {})}\nJob analysis: {(job.parsed_analysis_json if job else {})}"
-    evaluation_payload = json.dumps([{"question": question.question_text, "answer": answer.answer_text, "feedback": feedback.ai_feedback, "scores": {"technical": feedback.technical_score, "communication": feedback.communication_score, "relevance": feedback.relevance_score, "clarity": feedback.clarity_score, "confidence": feedback.confidence_score}} for feedback, answer, question in evaluations])
-    try:
-        final_feedback, final_result = await get_structured_llm_service().generate_final_feedback(interview_context, evaluation_payload)
-    except (ValueError, LLMProviderError) as exc:
-        raise HTTPException(status_code=502, detail="Final interview feedback is temporarily unavailable") from exc
-    interview.ended_at = datetime.now(timezone.utc)
-    interview.status = InterviewStatus.COMPLETED
-    interview.final_feedback_json = final_feedback.model_dump()
-    if interview.started_at:
-        started_at = interview.started_at
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=timezone.utc)
-        interview.actual_duration_seconds = max(0, int((interview.ended_at - started_at).total_seconds()))
-    interview.overall_score = final_feedback.overall_score
-    db.commit()
-    record_ai_usage(db, user_id=user.id, interview_id=interview.id, request_type="final_feedback", result=final_result)
-    db.refresh(interview)
-    return interview
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Unable to end interview: {exc}") from exc
 
 
 @router.get("/{interview_id}/feedback", response_model=list[FeedbackResponse])
