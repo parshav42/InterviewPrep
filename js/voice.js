@@ -31,7 +31,8 @@ export class BrowserTextToSpeechProvider {
     this.stop();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'en-US';
-    utterance.rate = 0.96;
+    const normalizedLength = String(text || '').trim().length;
+    utterance.rate = normalizedLength > 180 ? 0.88 : normalizedLength > 90 ? 0.96 : 1.05;
     utterance.pitch = 1;
     const voices = this.synthesis.getVoices();
     const preferredVoice = voices.find(voice => voice.lang && voice.lang.toLowerCase().startsWith('en')) || voices[0];

@@ -152,7 +152,7 @@ def test_credit_concurrency_allows_only_one_debit(client):
 def test_llm_rate_limit_allows_under_rejects_over_and_resets(client, monkeypatch):
     import app.middleware.llm_rate_limit as limiter
 
-    limiter.MAX_REQUESTS_PER_MINUTE = 2
+    monkeypatch.setattr(limiter, "MAX_REQUESTS_PER_MINUTE", 2)
     owner = auth_headers(client, "rate@example.com")
     user_id = UUID(client.get("/api/user/profile", headers=owner).json()["id"])
     from app.middleware.llm_rate_limit import check_llm_rate_limit
@@ -170,3 +170,82 @@ def test_llm_rate_limit_allows_under_rejects_over_and_resets(client, monkeypatch
         db.query(AIUsage).update({"created_at": datetime.now(timezone.utc) - timedelta(minutes=2)})
         db.commit()
         check_llm_rate_limit(user, db)
+
+
+def test_answer_quality_signal_classification():
+    from app.api.interviews import classify_answer_quality
+
+    assert classify_answer_quality("I don't know") == "vague"
+    assert classify_answer_quality("I would explain the design and share the measurable outcome.") == "strong"
+    assert classify_answer_quality("sorry this feels bad") == "emotional"
+    assert classify_answer_quality("three words only") == "short"
+    assert classify_answer_quality("I am not sure") == "vague"
+
+
+def test_remove_user_data_deletes_resources(client):
+    owner = auth_headers(client, "cleanup@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    job = client.post("/api/jobs", headers=owner, json={"title": "ML Engineer", "job_description": "Build models"}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"job_id": job["id"], "resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    question = client.post(f"/api/interviews/{interview['id']}/start", headers=owner)
+    assert question.status_code == 200
+    current = client.get(f"/api/interviews/{interview['id']}/questions/current", headers=owner).json()
+    client.post(f"/api/interviews/{interview['id']}/answer", headers=owner, json={"question_id": current["id"], "answer_text": "I built a recommendation system and improved accuracy by 12 percent."})
+
+    with SessionLocal() as db:
+        user_id = UUID(client.get("/api/user/profile", headers=owner).json()["id"])
+        from app.db.models.domain import AnalyticsEvent
+        db.add(AnalyticsEvent(user_id=user_id, event_name="interview_started", interview_id=UUID(interview["id"]), metadata_json={"source": "test"}))
+        db.commit()
+
+    response = client.delete("/api/user/data", headers=owner)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["removed"]["resumes"] >= 1
+    assert payload["removed"]["jobs"] >= 1
+    assert payload["removed"]["interviews"] >= 1
+    assert client.get("/api/user/profile", headers=owner).status_code == 200
+    assert client.get("/api/interviews", headers=owner).json() == []
+
+
+def test_history_returns_real_score_and_duration(client):
+    owner = auth_headers(client, "history@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    with SessionLocal() as db:
+        from app.db.models.domain import Interview
+        row = db.get(Interview, UUID(interview["id"]))
+        row.started_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        row.ended_at = datetime.now(timezone.utc)
+        row.actual_duration_seconds = 300
+        row.overall_score = 86.5
+        row.status = "COMPLETED"
+        db.commit()
+
+    history = client.get("/api/interviews", headers=owner).json()
+    assert len(history) == 1
+    assert history[0]["duration_seconds"] == 300
+    assert history[0]["score"] == 86.5
+    assert "status" not in history[0]
+
+
+def test_interview_prompt_includes_last_answer_quality(client, monkeypatch):
+    owner = auth_headers(client, "prompt@example.com")
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    start = client.post(f"/api/interviews/{interview['id']}/start", headers=owner)
+    assert start.status_code == 200
+    first_question = client.get(f"/api/interviews/{interview['id']}/questions/current", headers=owner).json()
+
+    from app.services.llm.structured_service import StructuredLLMService
+    original = StructuredLLMService.generate_question
+    captured = {}
+
+    async def capture(self, context):
+        captured["context"] = context
+        return await original(self, context)
+
+    monkeypatch.setattr(StructuredLLMService, "generate_question", capture)
+    response = client.post(f"/api/interviews/{interview['id']}/answer", headers=owner, json={"question_id": first_question["id"], "answer_text": "I don't know"})
+    assert response.status_code == 200
+    assert "Last answer quality: vague" in captured["context"]
