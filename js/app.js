@@ -19,18 +19,33 @@ const icons = {
 const state = { view: window.location.hash === '#login' || !getAuthToken() ? 'auth' : 'dashboard', authMode: 'login', user: null, creditBalance: null, resumes: [], jobs: [], interviews: [], resume: null, resumeError: null, role: '', jobDescription: '', type: 'Mixed Interview', difficulty: 'Intermediate', duration: '30 min', timer: 1722, question: 1, recording: false, cameraStatus: 'CAMERA_OFF', microphoneStatus: 'MIC_OFF', speaker: true, interviewState: 'IDLE', mediaStream: null, microphoneStream: null, speechRecognition: null, textToSpeech: null, transcript: '', interimTranscript: '', answerStartedAt: 0, silenceTimer: null, processingAnswer: false, isSubmitting: false, silencePrompt: false, voiceInitialized: false, sttFallback: false };
 
 function openBuyPanel() {
+  console.log('openBuyPanel()');
   document.getElementById('buy-panel')?.remove();
   const panel = document.createElement('div');
   panel.id = 'buy-panel';
   panel.className = 'buy-panel';
+  panel.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 23, 42, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+  `;
   panel.innerHTML = `
-    <div class="buy-panel-header">
-      <h3>Choose a plan</h3>
-      <button type="button" class="btn btn-secondary" data-close-buy>Close</button>
-    </div>
-    <div class="buy-panel-body">
-      <button type="button" class="btn btn-primary" data-plan="starter">Starter — 1 interview — Free</button>
-      <button type="button" class="btn btn-primary" data-plan="pro">Pro — 10 interviews — ₹499</button>
+    <div style="background:#fff;padding:24px;border-radius:12px;min-width:320px;max-width:480px;width:min(90vw,480px);box-shadow:0 20px 50px rgba(0,0,0,.25);">
+      <h3 style="margin:0 0 16px;font-size:18px">Choose a plan</h3>
+      <button type="button" data-plan="starter" class="btn btn-primary" style="display:block;width:100%;margin-bottom:8px">
+        1 interview — ₹49
+      </button>
+      <button type="button" data-plan="pro" class="btn btn-primary" style="display:block;width:100%;margin-bottom:16px">
+        10 interviews — ₹499
+      </button>
+      <button type="button" data-close-buy class="btn btn-secondary" style="width:100%">Close</button>
     </div>
   `;
   document.body.appendChild(panel);
@@ -40,15 +55,9 @@ function openBuyPanel() {
   panel.querySelectorAll('[data-plan]').forEach(button => {
     button.onclick = async () => {
       const plan = button.getAttribute('data-plan');
+      console.log('Plan selected:', plan);
       try {
         const response = await paymentApi.createOrder(plan);
-        if (response.free) {
-          await refreshCredits();
-          panel.remove();
-          showToast('1 interview added');
-          return;
-        }
-
         if (typeof window.Razorpay !== 'function') {
           throw new Error('Payment checkout is unavailable. Please refresh and try again.');
         }
@@ -59,7 +68,7 @@ function openBuyPanel() {
           currency: 'INR',
           order_id: response.order_id,
           name: 'InterviewAI',
-          description: plan === 'pro' ? 'Pro — 10 interviews' : 'Starter — 1 interview',
+          description: plan === 'pro' ? '10 interviews' : '1 interview',
           theme: { color: '#4F46E5' },
           handler: async (result) => {
             try {
@@ -116,15 +125,10 @@ async function refreshCredits() {
     console.error('refreshCredits failed', error);
   }
 }
-async function purchasePlan(plan) {
+async async function purchasePlan(plan) {
   try {
     const response = await paymentApi.createOrder(plan);
     document.querySelector('#credits-panel')?.remove();
-    if (response.free) {
-      await refreshCredits();
-      showToast('1 free interview added');
-      return;
-    }
     if (typeof window.Razorpay !== 'function') throw new Error('Payment checkout is unavailable. Please refresh and try again.');
     const checkout = new window.Razorpay({
       key: response.key_id,
@@ -588,8 +592,18 @@ async function removeUserData() {
 }
 
 function bindEvents() {
-  document.querySelector('#buy-credits')?.addEventListener('click', openBuyPanel);
-  document.querySelectorAll('[data-buy]').forEach(button => button.addEventListener('click', openBuyPanel));
+  document.querySelector('#buy-credits')?.addEventListener('click', () => {
+    console.log('Buy clicked');
+    openBuyPanel();
+  });
+  document.querySelectorAll('[data-buy]').forEach(button => {
+    console.log('binding data-buy', button);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      console.log('Buy clicked');
+      openBuyPanel();
+    });
+  });
   document.querySelector('#profile-logout')?.addEventListener('click', logout);
   document.querySelector('#profile-remove-data')?.addEventListener('click', removeUserData);
   document.querySelector('[data-resume-change="true"]')?.addEventListener('click', () => { state.resumeSelectionMode = 'upload'; render(); });
@@ -598,12 +612,12 @@ function bindEvents() {
     if (!id) return;
     try {
       await resumeApi.remove(id);
-      state.resumes = state.resumes.filter(item => item.id !== id);
-      if (state.resume?.id === id) state.resume = null;
-      render();
     } catch (error) {
-      showToast('Could not remove resume', normalizeApiError(error));
+      if (error.status !== 404) throw error;
     }
+    state.resumes = state.resumes.filter(item => item.id !== id);
+    if (state.resume?.id === id) state.resume = null;
+    render();
   }));
   document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', async () => {
     const nextView = button.dataset.view;

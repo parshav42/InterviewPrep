@@ -21,7 +21,7 @@ from app.services.credit_service import grant_minutes
 router = APIRouter()
 settings = get_settings()
 PLANS = {
-    "starter": {"interviews": 1, "amount_paise": 0},
+    "starter": {"interviews": 1, "amount_paise": 4900},
     "pro": {"interviews": 10, "amount_paise": 49900},
 }
 
@@ -68,11 +68,6 @@ def create_order(
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     plan = PLANS[payload.plan]
-    if payload.plan == "starter":
-        credit = grant_minutes(db, user.id, plan["interviews"], "starter", tx_type="PURCHASE")
-        db.commit()
-        return {"free": True, "credits_added": plan["interviews"], "interviews_added": plan["interviews"], "balance_minutes": credit.balance_minutes, "balance_interviews": credit.balance_minutes}
-
     razorpay_order = _client().order.create({
         "amount": plan["amount_paise"],
         "currency": "INR",

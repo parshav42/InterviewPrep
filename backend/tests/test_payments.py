@@ -30,16 +30,20 @@ def sign(secret, payload):
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
-def test_create_order_for_starter_grants_credits(client):
+def test_create_order_for_starter_uses_paid_plan(client, monkeypatch):
+    monkeypatch.setattr(payments, "_client", lambda: FakeRazorpayClient())
     headers = auth_headers(client)
     response = client.post("/api/payments/create-order", headers=headers, json={"plan": "starter"})
     assert response.status_code == 200
-    assert response.json()["free"] is True
-    assert response.json()["credits_added"] == 1
+    assert response.json()["order_id"] == "order_test_123"
+    assert response.json()["amount_paise"] == 4900
     with SessionLocal() as db:
         credit = db.query(Credit).one()
-        assert credit.balance_minutes == 2
-        assert db.query(CreditTransaction).filter_by(transaction_type="PURCHASE").one().amount_minutes == 1
+        assert credit.balance_minutes == 1
+        order = db.query(PaymentOrder).one()
+        assert order.status == "CREATED"
+        assert order.credits_minutes == 1
+        assert db.query(CreditTransaction).filter_by(transaction_type="PURCHASE").count() == 0
 
 
 def test_create_order_for_pro_uses_server_catalog(client, monkeypatch):

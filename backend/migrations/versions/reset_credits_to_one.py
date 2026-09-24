@@ -8,7 +8,7 @@ depends_on = None
 
 
 def upgrade():
-    op.execute("UPDATE credits SET balance_interviews = 1")
+    op.execute("UPDATE credits SET balance_minutes = 1")
 
 
 def downgrade():
