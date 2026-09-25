@@ -63,6 +63,20 @@ class Interview(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class InterviewMedia(Base):
+    __tablename__ = "interview_media"
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    interview_id: Mapped[UUID | None] = mapped_column(ForeignKey("interviews.id", ondelete="SET NULL"), index=True)
+    media_type: Mapped[str] = mapped_column(String(40), default="photo")
+    storage_key: Mapped[str] = mapped_column(String(500), unique=True)
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    file_size: Mapped[int | None] = mapped_column(Integer)
+    content_type: Mapped[str | None] = mapped_column(String(120))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class InterviewQuestion(Base):
     __tablename__ = "interview_questions"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

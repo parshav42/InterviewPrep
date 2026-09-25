@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import admin_user
 from app.db.database import get_db
-from app.db.models.domain import AdminAuditLog, AIUsage, AnalyticsEvent, Interview, Job, Resume
+from app.db.models.domain import AdminAuditLog, AIUsage, AnalyticsEvent, Interview, InterviewMedia, Job, Resume
 from app.db.models.user import User
 from app.services.storage_service import PrivateStorage
 
@@ -140,14 +140,41 @@ def user_resume_download(user_id: UUID, admin: Annotated[User, Depends(admin_use
     return Response(content=content, media_type=resume.file_type or "application/octet-stream", headers={"Content-Disposition": f'inline; filename="{resume.original_filename}"'})
 
 
+@router.get("/users/{user_id}/media/{media_id}")
+def user_media_download(user_id: UUID, media_id: UUID, admin: Annotated[User, Depends(admin_user)], db: Annotated[Session, Depends(get_db)]) -> Response:
+    media = db.get(InterviewMedia, media_id)
+    if not media or media.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Media not found")
+    storage = PrivateStorage()
+    try:
+        content = storage.get(media.storage_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Media file not found") from exc
+    return Response(content=content, media_type=media.content_type or "application/octet-stream", headers={"Content-Disposition": f'inline; filename="{media.original_filename or media.storage_key}"'})
+
+
 @router.get("/users/{user_id}")
 def user_detail(user_id: UUID, request: Request, admin: Annotated[User, Depends(admin_user)], db: Annotated[Session, Depends(get_db)]) -> dict:
     target = db.get(User, user_id)
     if not target:
         return {"detail": "User not found"}
     audit(db, admin, "view_user", "user", str(user_id), request)
-    interview_count = db.scalar(select(func.count()).select_from(Interview).where(Interview.user_id == user_id)) or 0
-    return {"id": str(target.id), "email": target.email, "full_name": target.full_name, "role": target.role, "created_at": target.created_at, "last_login_at": target.last_login_at, "interview_count": interview_count}
+    resume = db.scalar(select(Resume).where(Resume.user_id == user_id, Resume.deleted_at.is_(None)).order_by(Resume.uploaded_at.desc()))
+    interviews = list(db.scalars(select(Interview).where(Interview.user_id == user_id).order_by(Interview.created_at.desc())))
+    media_items = list(db.scalars(select(InterviewMedia).where(InterviewMedia.user_id == user_id).order_by(InterviewMedia.captured_at.desc())))
+    return {
+        "id": str(target.id),
+        "email": target.email,
+        "full_name": target.full_name,
+        "role": target.role,
+        "created_at": target.created_at,
+        "last_login_at": target.last_login_at,
+        "avatar_initials": initials_for(target.full_name, target.email),
+        "resume": {"id": str(resume.id), "filename": resume.original_filename, "file_type": resume.file_type, "download_url": f"/api/admin/users/{user_id}/resume"} if resume else None,
+        "interview_count": len(interviews),
+        "interviews": [{"id": str(item.id), "status": item.status, "score": item.overall_score, "created_at": item.created_at, "duration_seconds": item.actual_duration_seconds} for item in interviews],
+        "media": [{"id": str(item.id), "type": item.media_type, "filename": item.original_filename, "captured_at": item.captured_at, "content_type": item.content_type, "download_url": f"/api/admin/users/{user_id}/media/{item.id}", "metadata": item.metadata_json} for item in media_items],
+    }
 
 
 @router.get("/interviews", dependencies=[Depends(admin_user)])
