@@ -68,6 +68,33 @@ async function load() {
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]); }
 function formatDate(value) { return value ? new Date(value).toLocaleString() : '—'; }
 function emptyRow(columns, message) { return `<tr><td colspan="${columns}" class="muted">${message}</td></tr>`; }
+function downloadResumeFile(path, filename) {
+  const authToken = token();
+  if (!authToken) {
+    showAuth('Admin access required.');
+    return;
+  }
+  fetch(apiUrl(path), { headers: { Authorization: `Bearer ${authToken}` } })
+    .then(async response => {
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || 'Resume download failed');
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename || 'resume.pdf';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    })
+    .catch(error => {
+      const errorNode = document.querySelector('#error');
+      if (errorNode) errorNode.textContent = error.message || 'Resume download failed.';
+    });
+}
 function renderDashboard(dashboard, users = dashboard.recent_users || []) {
   const metrics = [['Total users', dashboard.total_users], ['Active users', dashboard.active_users], ['Total resumes', dashboard.total_resumes], ['Total jobs', dashboard.total_jobs], ['Total interviews', dashboard.total_interviews], ['Completed interviews', dashboard.completed_interviews], ['AI requests', dashboard.ai_requests], ['AI failures', dashboard.ai_failures], ['Avg latency', `${dashboard.average_llm_latency_ms} ms`], ['Estimated AI cost', `$${Number(dashboard.estimated_ai_cost).toFixed(2)}`]];
   document.querySelector('#metrics').innerHTML = metrics.map(([label, value]) => `<article class="card stat-card"><div class="stat-top"><span>${label}</span></div><strong class="stat-value">${escapeHtml(value)}</strong></article>`).join('');
@@ -75,9 +102,16 @@ function renderDashboard(dashboard, users = dashboard.recent_users || []) {
   document.querySelector('#users').innerHTML = users.length ? users.map(user => {
     const initials = escapeHtml(user.avatar_initials || (user.full_name || user.email || 'U').slice(0, 2).toUpperCase());
     const resumeName = user.resume_filename ? escapeHtml(user.resume_filename) : 'No resume';
-    const resumeLink = user.resume_url ? `<a href="${user.resume_url}" target="_blank" rel="noopener noreferrer" class="muted" style="display:inline-block;margin-top:6px; color:#4f46e5; text-decoration:underline;">${resumeName}</a>` : '<span class="muted" style="display:inline-block;margin-top:6px;">No resume</span>';
+    const resumeLink = user.resume_url ? `<button type="button" class="btn btn-quiet" data-resume-download="${escapeHtml(user.resume_url)}" data-resume-name="${escapeHtml(user.resume_filename || 'resume.pdf')}" style="display:inline-block;margin-top:6px;">${resumeName}</button>` : '<span class="muted" style="display:inline-block;margin-top:6px;">No resume</span>';
     return `<tr><td><div style="display:flex;align-items:center;gap:10px;min-width:220px"><span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#e0e7ff,#c7d2fe);color:#1f2937;font-weight:700;font-size:12px;">${initials}</span><div><div class="role">${escapeHtml(user.full_name || 'Unknown user')}</div>${resumeLink}</div></div></td><td class="muted">${escapeHtml(user.email)}</td><td class="muted">${formatDate(user.created_at)}</td><td>${escapeHtml(user.role)}</td><td><span class="status">${user.is_active ? 'Active' : 'Inactive'}</span></td></tr>`;
   }).join('') : emptyRow(5, 'No users yet.');
+  document.querySelectorAll('[data-resume-download]').forEach(button => {
+    button.addEventListener('click', () => {
+      const path = button.getAttribute('data-resume-download');
+      const filename = button.getAttribute('data-resume-name') || 'resume.pdf';
+      downloadResumeFile(path, filename);
+    });
+  });
   const interviews = dashboard.recent_interviews || [];
   document.querySelector('#interview-count').textContent = `${dashboard.total_interviews} total`;
   document.querySelector('#interviews').innerHTML = interviews.length ? interviews.map(interview => `<tr><td class="role">${escapeHtml(interview.id)}</td><td class="muted">${escapeHtml(interview.user_id)}</td><td class="muted">${formatDate(interview.created_at)}</td><td><span class="status">${escapeHtml(interview.status)}</span></td><td>${interview.score == null ? '—' : escapeHtml(interview.score)}</td></tr>`).join('') : emptyRow(5, 'No interviews yet.');
