@@ -1,4 +1,5 @@
 import { api, authApi, getAuthToken, interviewApi, jobApi, normalizeApiError, paymentApi, resumeApi, userApi } from './api.js?v=integration4';
+import { useTabTitleAnimation } from './useTabTitleAnimation.mjs';
 import { BrowserSpeechToTextProvider, BrowserTextToSpeechProvider, requestInterviewCamera, requestInterviewMicrophone, stopInterviewMedia } from './voice.js';
 
 const app = document.querySelector('#app');
@@ -724,6 +725,9 @@ async function handleFile(file) { if (!file) return; const valid = ['application
 }
 function showEndModal() { const backdrop = document.createElement('div'); backdrop.className = 'modal-backdrop'; backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="end-title"><p class="eyebrow">Finish session</p><h2 id="end-title">End this interview?</h2><p class="subtle">Your progress will be saved and you will receive a performance summary.</p><div class="modal-actions"><button class="btn btn-secondary" id="cancel-end">Cancel</button><button class="btn btn-danger" id="confirm-end">End interview</button></div></div>`; document.body.append(backdrop); backdrop.querySelector('#cancel-end').addEventListener('click', () => backdrop.remove()); backdrop.querySelector('#confirm-end').addEventListener('click', async () => { cleanupRealtimeInterview(); if (getAuthToken() && state.interviewId) { try { await interviewApi.end(state.interviewId); state.creditBalance = (await userApi.credits()).balance_minutes; } catch (error) { showToast('Could not save interview', error.message); return; } } backdrop.remove(); state.interviewState = 'INTERVIEW_COMPLETE'; state.view = 'results'; render(); }); }
 window.onbeforeunload = null;
+const tabTitleAnimation = useTabTitleAnimation();
+window.addEventListener('beforeunload', tabTitleAnimation.cleanup);
+
 try {
   render();
   loadUserData();
