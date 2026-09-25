@@ -49,9 +49,12 @@ async function load() {
   error.textContent = '';
   activeRequest = (async () => {
     try {
-      const dashboard = await get('/api/admin/dashboard', controller.signal);
+      const [dashboard, usersPage] = await Promise.all([
+        get('/api/admin/dashboard', controller.signal),
+        get('/api/admin/users?page=1&page_size=100', controller.signal)
+      ]);
       if (requestId !== requestSequence) return;
-      renderDashboard(dashboard);
+      renderDashboard(dashboard, usersPage.items || []);
       document.querySelector('#last-updated').textContent = `Last updated ${new Date().toLocaleTimeString()}`;
     } catch (loadError) {
       if (loadError.name !== 'AbortError' && requestId === requestSequence) error.textContent = 'Dashboard data is temporarily unavailable. Please try again.';
@@ -65,12 +68,16 @@ async function load() {
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]); }
 function formatDate(value) { return value ? new Date(value).toLocaleString() : '—'; }
 function emptyRow(columns, message) { return `<tr><td colspan="${columns}" class="muted">${message}</td></tr>`; }
-function renderDashboard(dashboard) {
+function renderDashboard(dashboard, users = dashboard.recent_users || []) {
   const metrics = [['Total users', dashboard.total_users], ['Active users', dashboard.active_users], ['Total resumes', dashboard.total_resumes], ['Total jobs', dashboard.total_jobs], ['Total interviews', dashboard.total_interviews], ['Completed interviews', dashboard.completed_interviews], ['AI requests', dashboard.ai_requests], ['AI failures', dashboard.ai_failures], ['Avg latency', `${dashboard.average_llm_latency_ms} ms`], ['Estimated AI cost', `$${Number(dashboard.estimated_ai_cost).toFixed(2)}`]];
   document.querySelector('#metrics').innerHTML = metrics.map(([label, value]) => `<article class="card stat-card"><div class="stat-top"><span>${label}</span></div><strong class="stat-value">${escapeHtml(value)}</strong></article>`).join('');
-  const users = dashboard.recent_users || [];
-  document.querySelector('#user-count').textContent = `${dashboard.total_users} total`;
-  document.querySelector('#users').innerHTML = users.length ? users.map(user => `<tr><td class="role">${escapeHtml(user.full_name)}</td><td class="muted">${escapeHtml(user.email)}</td><td class="muted">${formatDate(user.created_at)}</td><td>${escapeHtml(user.role)}</td><td><span class="status">${user.is_active ? 'Active' : 'Inactive'}</span></td></tr>`).join('') : emptyRow(5, 'No users yet.');
+  document.querySelector('#user-count').textContent = `${users.length} total`;
+  document.querySelector('#users').innerHTML = users.length ? users.map(user => {
+    const initials = escapeHtml(user.avatar_initials || (user.full_name || user.email || 'U').slice(0, 2).toUpperCase());
+    const resumeName = user.resume_filename ? escapeHtml(user.resume_filename) : 'No resume';
+    const resumeLink = user.resume_url ? `<a href="${user.resume_url}" target="_blank" rel="noopener noreferrer" class="muted" style="display:inline-block;margin-top:6px; color:#4f46e5; text-decoration:underline;">${resumeName}</a>` : '<span class="muted" style="display:inline-block;margin-top:6px;">No resume</span>';
+    return `<tr><td><div style="display:flex;align-items:center;gap:10px;min-width:220px"><span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#e0e7ff,#c7d2fe);color:#1f2937;font-weight:700;font-size:12px;">${initials}</span><div><div class="role">${escapeHtml(user.full_name || 'Unknown user')}</div>${resumeLink}</div></div></td><td class="muted">${escapeHtml(user.email)}</td><td class="muted">${formatDate(user.created_at)}</td><td>${escapeHtml(user.role)}</td><td><span class="status">${user.is_active ? 'Active' : 'Inactive'}</span></td></tr>`;
+  }).join('') : emptyRow(5, 'No users yet.');
   const interviews = dashboard.recent_interviews || [];
   document.querySelector('#interview-count').textContent = `${dashboard.total_interviews} total`;
   document.querySelector('#interviews').innerHTML = interviews.length ? interviews.map(interview => `<tr><td class="role">${escapeHtml(interview.id)}</td><td class="muted">${escapeHtml(interview.user_id)}</td><td class="muted">${formatDate(interview.created_at)}</td><td><span class="status">${escapeHtml(interview.status)}</span></td><td>${interview.score == null ? '—' : escapeHtml(interview.score)}</td></tr>`).join('') : emptyRow(5, 'No interviews yet.');
