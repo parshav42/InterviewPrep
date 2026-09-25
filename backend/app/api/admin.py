@@ -32,6 +32,11 @@ def resume_payload_for_user(db: Session, user_id: str | UUID) -> dict | None:
     resume = db.scalar(select(Resume).where(Resume.user_id == user_id, Resume.deleted_at.is_(None)).order_by(Resume.uploaded_at.desc()))
     if not resume:
         return None
+    storage = PrivateStorage()
+    try:
+        storage.get(resume.storage_key)
+    except FileNotFoundError:
+        return None
     return {"id": str(resume.id), "filename": resume.original_filename, "file_type": resume.file_type, "url": f"/api/admin/users/{user_id}/resume"}
 
 
@@ -195,8 +200,19 @@ def user_detail(user_id: UUID, request: Request, admin: Annotated[User, Depends(
         return {"detail": "User not found"}
     audit(db, admin, "view_user", "user", str(user_id), request)
     resume = db.scalar(select(Resume).where(Resume.user_id == user_id, Resume.deleted_at.is_(None)).order_by(Resume.uploaded_at.desc()))
+    if resume is not None:
+        try:
+            PrivateStorage().get(resume.storage_key)
+        except FileNotFoundError:
+            resume = None
     interviews = list(db.scalars(select(Interview).where(Interview.user_id == user_id).order_by(Interview.created_at.desc())))
-    media_items = list(db.scalars(select(InterviewMedia).where(InterviewMedia.user_id == user_id).order_by(InterviewMedia.captured_at.desc())))
+    media_items = []
+    for item in db.scalars(select(InterviewMedia).where(InterviewMedia.user_id == user_id).order_by(InterviewMedia.captured_at.desc())):
+        try:
+            PrivateStorage().get(item.storage_key)
+        except FileNotFoundError:
+            continue
+        media_items.append(item)
     return {
         "id": str(target.id),
         "email": target.email,
