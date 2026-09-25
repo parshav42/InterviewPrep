@@ -7,8 +7,8 @@ let activeRequest;
 let requestSequence = 0;
 
 function apiUrl(path) {
-  const normalizedPath = path.startsWith('/api/') ? path.slice(4) : path;
-  return `${API_BASE_URL}${normalizedPath}`;
+  const normalizedPath = path.startsWith('/api') ? path.replace(/^\/api/, '') : path;
+  return `${API_BASE_URL}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
 }
 
 function token() { return localStorage.getItem(TOKEN_KEY); }

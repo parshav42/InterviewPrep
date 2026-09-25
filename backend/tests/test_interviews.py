@@ -153,6 +153,9 @@ def test_admin_user_download_all_bundle_includes_resume_and_media(client):
     interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
     user_id = UUID(client.get("/api/user/profile", headers=owner).json()["id"])
     interview_id = UUID(interview["id"])
+    storage_dir = Path(".private_uploads/uploads/demo")
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    (storage_dir / "capture.jpg").write_bytes(b"fake-jpg-data")
     with SessionLocal() as db:
         db.add(InterviewMedia(user_id=user_id, interview_id=interview_id, media_type="photo", storage_key="uploads/demo/capture.jpg", original_filename="capture.jpg", file_size=1024, content_type="image/jpeg", metadata_json={"camera": "front", "resolution": "1280x720"}))
         db.commit()

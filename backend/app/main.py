@@ -66,6 +66,11 @@ def health() -> dict[str, str]:
     return {"status": "ok", "database": "ok"}
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    return FileResponse(project_root / "favicon.svg", media_type="image/svg+xml")
+
+
 @app.get("/", include_in_schema=False)
 def frontend() -> FileResponse:
     return FileResponse(project_root / "index.html")

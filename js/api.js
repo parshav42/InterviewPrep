@@ -5,8 +5,8 @@ export const API_BASE_URL = (() => {
 })();
 
 function apiUrl(path) {
-  const normalizedPath = path.startsWith('/api/') ? path.slice(4) : path;
-  return `${API_BASE_URL}${normalizedPath}`;
+  const normalizedPath = path.startsWith('/api') ? path.replace(/^\/api/, '') : path;
+  return `${API_BASE_URL}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
 }
 
 export function setAuthToken(token) { localStorage.setItem('interviewai_access_token', token); }

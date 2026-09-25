@@ -5,7 +5,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app app
 COPY backend/migrations migrations
 COPY backend/alembic.ini .
-COPY index.html admin.html admin.js ./
+COPY index.html admin.html admin.js favicon.svg ./
 COPY css css
 # ... existing COPY lines ...
 COPY backend/scripts scripts
