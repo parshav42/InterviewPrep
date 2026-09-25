@@ -1,6 +1,6 @@
 const DEFAULT_MESSAGES = [
+  '🔥 Heyy',
   '👋 Heyyy, come back!',
-  '🥺 We still wait for you...',
   '💬 Don\'t leave us hanging',
   '✨ Your interview awaits',
 ];
