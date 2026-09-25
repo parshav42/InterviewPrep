@@ -118,6 +118,25 @@ function downloadMediaFile(path, filename) {
       if (errorNode) errorNode.textContent = error.message || 'Media download failed.';
     });
 }
+function downloadAllBundle(userId, filename = 'user_bundle.zip') {
+  const authToken = token();
+  if (!authToken) {
+    showAuth('Admin access required.');
+    return;
+  }
+  fetch(apiUrl(`/api/admin/users/${userId}/download-all`), { headers: { Authorization: `Bearer ${authToken}` } })
+    .then(async response => {
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || 'Bundle download failed');
+      }
+      return downloadBlobFile(response, filename);
+    })
+    .catch(error => {
+      const errorNode = document.querySelector('#error');
+      if (errorNode) errorNode.textContent = error.message || 'Bundle download failed.';
+    });
+}
 function renderUserDetail(user) {
   const panel = document.getElementById('user-detail-panel') || (() => {
     const block = document.createElement('section');
@@ -128,6 +147,7 @@ function renderUserDetail(user) {
     return block;
   })();
   const resumeButton = user.resume ? `<button type="button" class="btn btn-primary" data-resume-download="${escapeHtml(user.resume.download_url)}" data-resume-name="${escapeHtml(user.resume.filename || 'resume.pdf')}">Download resume PDF</button>` : '<span class="muted">No resume uploaded</span>';
+  const bundleButton = `<button type="button" class="btn btn-secondary" data-download-all="${escapeHtml(user.id)}" data-bundle-name="${escapeHtml((user.full_name || user.email || 'user').replace(/\s+/g, '_') + '_bundle.zip')}">Download all</button>`;
   const mediaMarkup = (user.media || []).length ? user.media.map(media => `
     <div class="card" style="padding:12px 14px; margin-top:10px;">
       <strong>${escapeHtml(media.type || 'Media')}</strong>
@@ -159,7 +179,7 @@ function renderUserDetail(user) {
           <div class="muted">Role: ${escapeHtml(user.role)} • Joined: ${formatDate(user.created_at)}</div>
         </div>
       </div>
-      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">${resumeButton}</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">${resumeButton}${bundleButton}</div>
       <div style="margin-bottom:18px;">
         <h4>Interview history</h4>
         ${interviewsMarkup}
@@ -184,6 +204,13 @@ function renderUserDetail(user) {
       const path = button.getAttribute('data-media-download');
       const filename = button.getAttribute('data-media-name') || 'media';
       downloadMediaFile(path, filename);
+    });
+  });
+  document.querySelectorAll('[data-download-all]').forEach(button => {
+    button.addEventListener('click', () => {
+      const userId = button.getAttribute('data-download-all');
+      const filename = button.getAttribute('data-bundle-name') || 'user_bundle.zip';
+      if (userId) downloadAllBundle(userId, filename);
     });
   });
 }

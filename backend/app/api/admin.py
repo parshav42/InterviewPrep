@@ -1,3 +1,5 @@
+import io
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import UUID
@@ -151,6 +153,39 @@ def user_media_download(user_id: UUID, media_id: UUID, admin: Annotated[User, De
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Media file not found") from exc
     return Response(content=content, media_type=media.content_type or "application/octet-stream", headers={"Content-Disposition": f'inline; filename="{media.original_filename or media.storage_key}"'})
+
+
+@router.get("/users/{user_id}/download-all")
+def user_download_all(user_id: UUID, admin: Annotated[User, Depends(admin_user)], db: Annotated[Session, Depends(get_db)]) -> Response:
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    storage = PrivateStorage()
+    resume = db.scalar(select(Resume).where(Resume.user_id == user_id, Resume.deleted_at.is_(None)).order_by(Resume.uploaded_at.desc()))
+    media_items = list(db.scalars(select(InterviewMedia).where(InterviewMedia.user_id == user_id).order_by(InterviewMedia.captured_at.desc())))
+    if resume is None and not media_items:
+        raise HTTPException(status_code=404, detail="No files available for download")
+
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        if resume is not None:
+            try:
+                content = storage.get(resume.storage_key)
+            except FileNotFoundError:
+                content = b""
+            archive.writestr(f"resume/{resume.original_filename or 'resume.pdf'}", content)
+
+        for index, media in enumerate(media_items, start=1):
+            try:
+                content = storage.get(media.storage_key)
+            except FileNotFoundError:
+                continue
+            filename = media.original_filename or f"media_{index}"
+            archive.writestr(f"media/{filename}", content)
+
+    bundle_bytes = bundle.getvalue()
+    bundle_name = f"{(target.full_name or target.email or 'user').replace(' ', '_')}_bundle.zip"
+    return Response(content=bundle_bytes, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{bundle_name}"'})
 
 
 @router.get("/users/{user_id}")

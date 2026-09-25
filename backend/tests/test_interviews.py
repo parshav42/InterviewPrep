@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -132,6 +133,40 @@ def test_admin_user_detail_includes_profile_resume_and_media(client):
     assert len(payload["interviews"]) >= 1
     assert len(payload["media"]) == 1
     assert payload["media"][0]["metadata"]["camera"] == "front"
+
+
+def test_admin_user_download_all_bundle_includes_resume_and_media(client):
+    from uuid import UUID
+
+    from app.core.security import hash_password
+    from app.db.database import SessionLocal
+    from app.db.models.domain import InterviewMedia
+    from app.db.models.user import User, UserRole
+
+    with SessionLocal() as db:
+        db.add(User(email="admin@example.com", password_hash=hash_password("correct horse battery"), full_name="Site Admin", role=UserRole.ADMIN, email_verified=True))
+        db.commit()
+
+    owner = auth_headers(client, "bundle-user@example.com")
+    valid_pdf = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
+    resume = client.post("/api/resumes/upload", headers=owner, files={"file": ("resume.pdf", valid_pdf, "application/pdf")}).json()
+    interview = client.post("/api/interviews", headers=owner, json={"resume_id": resume["id"], "interview_type": "Technical", "difficulty": "Intermediate", "duration_target_minutes": 30}).json()
+    user_id = UUID(client.get("/api/user/profile", headers=owner).json()["id"])
+    interview_id = UUID(interview["id"])
+    with SessionLocal() as db:
+        db.add(InterviewMedia(user_id=user_id, interview_id=interview_id, media_type="photo", storage_key="uploads/demo/capture.jpg", original_filename="capture.jpg", file_size=1024, content_type="image/jpeg", metadata_json={"camera": "front", "resolution": "1280x720"}))
+        db.commit()
+
+    admin_login = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse battery"})
+    assert admin_login.status_code == 200, admin_login.text
+    headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
+
+    response = client.get(f"/api/admin/users/{user_id}/download-all", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/zip")
+    payload = response.content
+    assert b"resume.pdf" in payload
+    assert b"capture.jpg" in payload
 
 
 def test_question_cap_completes_interview_and_persists_final_feedback(client, monkeypatch):
